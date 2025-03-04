@@ -92,7 +92,8 @@ This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-
 
 ### Evaluation
 - For evaluation any model after training, use the `--eval-only MODEL.WEIGHTS PATH_TO_MODEL.pth`, instead of `--resume MODEL.WEIGHTS PATH_TO_MODEL.pth`. Otherwise the command is the same as the training command.
-- We include in the repository all three checkpoints, which you can directly use. (e.g output_CTVIS_R50_HybridOR_withsimstation, output_R50_HybridOR_temporal_online_withsimstation, DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation)
+- TODO put these into huggingface as well. We include in the repository all three checkpoints, which you can directly use. (
+  e.g https://huggingface.co/egeozsoy/MM-OR/tree/main/output_CTVIS_R50_HybridOR_withsimstation, https://huggingface.co/egeozsoy/MM-OR/tree/main/output_R50_HybridOR_temporal_online_withsimstation, https://huggingface.co/egeozsoy/MM-OR/resolve/main/DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation)
 - Running a full evaluation like this will likely be necessary if you want to use the segmentations for scene graph generation. Make sure to run it for train/val and eventually test splits.
 
 

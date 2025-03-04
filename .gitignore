@@ -16,3 +16,6 @@
 /.idea/MM-OR.iml
 /.idea/modules.xml
 /.idea/vcs.xml
+/panoptic_segmentation/DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation/model_final.pth
+/panoptic_segmentation/output_CTVIS_R50_HybridOR_withsimstation/model_final.pth
+/panoptic_segmentation/output_R50_HybridOR_temporal_online_withsimstation/model_final.pth
