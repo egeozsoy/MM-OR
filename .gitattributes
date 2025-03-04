@@ -1,0 +1,5 @@
+panoptic_segmentation/mask2former/ctvis_r50_vspw.pth filter=lfs diff=lfs merge=lfs -text
+panoptic_segmentation/mask2former/model_final_3c8ec9.pkl filter=lfs diff=lfs merge=lfs -text
+panoptic_segmentation/DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation/model_final.pth filter=lfs diff=lfs merge=lfs -text
+panoptic_segmentation/output_CTVIS_R50_HybridOR_withsimstation/model_final.pth filter=lfs diff=lfs merge=lfs -text
+panoptic_segmentation/output_R50_HybridOR_temporal_online_withsimstation/model_final.pth filter=lfs diff=lfs merge=lfs -text

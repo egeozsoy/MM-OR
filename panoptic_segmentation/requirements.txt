@@ -1,0 +1,19 @@
+cython
+numpy==1.23.0
+scipy==1.13.0
+matplotlib==3.3.4
+shapely
+timm
+h5py
+submitit
+einops
+opencv-python-headless
+open_clip_torch
+torch==1.13.1
+torchvision==0.14.1
+json_tricks
+wandb
+torchinfo==1.8.0
+Pillow==9.1.0
+#detectron2==0.6 # pip install "git+https://github.com/facebookresearch/detectron2.git@v0.6#egg=detectron2"
+#panopticapi==0.1

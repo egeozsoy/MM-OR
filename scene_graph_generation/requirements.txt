@@ -1,0 +1,20 @@
+torch==2.0.1
+torchvision==0.15.2
+torchaudio==2.0.2
+transformers==4.31.0
+pytorch-lightning==2.1.2
+json-tricks==3.17.3
+open3d==0.17.0
+accelerate==0.21.0
+bitsandbytes==0.41.0
+timm==0.6.13
+sentencepiece==0.1.99
+diffusers==0.25.0
+scikit-image==0.22.0
+opencv-python==4.9.0.80
+deepspeed==0.9.5
+flash-attn==2.3.4
+torchinfo==1.8.0
+wandb==0.16.0
+numpy==1.26.4
+# pip install -e . in LLaVA to install it locally, editable

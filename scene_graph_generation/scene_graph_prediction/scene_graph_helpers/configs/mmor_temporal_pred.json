@@ -1,0 +1,64 @@
+{
+  "MODEL": "SGPN",
+  "VERBOSE": true,
+  "MAX_EPOCHES": 25,
+  "LR": 0.00003,
+  "W_DECAY": 0.001,
+  "NUM_WORKERS": 8,
+  "USE_GT": false,
+  "USE_VIS_DESC": false,
+  "CAMERAS_4DOR": [
+    2,
+    1,
+    3,
+    5
+  ],
+  "CAMERAS_MMOR": [
+    1,
+    4,
+    5,
+    2,
+    3
+  ],
+  "IMAGE_INPUT": "full",
+  "EDGE_BUILD_TYPE": "KNN",
+  "temporality": "PRED",
+  "WEIGHTING": true,
+  "MODEL": {
+    "N_LAYERS": 2,
+    "USE_SPATIAL": true,
+    "WITH_BN": false,
+    "USE_GCN": true,
+    "USE_GCN_EDGE": true,
+    "USE_REL_LOSS": true,
+    "OBJ_PRED_FROM_GCN": true,
+    "INPUT_DROPOUT": 0.0,
+    "GCN_TYPE": "TRIP",
+    "point_feature_size": 256,
+    "edge_feature_size": 256,
+    "gcn_hidden_feature_size": 512,
+    "lambda_o": 0.000001,
+    "NUM_HEADS": 4,
+    "GCN_AGGR": "max",
+    "DIM_ATTEN": 256,
+    "WEIGHT_EDGE": "DYNAMIC",
+    "w_bg": 1.0,
+    "NONE_RATIO": 1.0,
+    "FULL_IMAGE_EMBEDDING_SIZE": 768,
+    "IMAGE_MODEL": "tf_efficientnet_b5_ns",
+    "mv_type": "learned"
+  },
+  "dataset": {
+    "root": [
+      "data"
+    ],
+    "data_augmentation": true,
+    "num_points_objects": 4000,
+    "num_points_relation": 8000,
+    "num_points_scene": 10000,
+    "image_res": 0,
+    "class_choice": [],
+    "max_edges": -1,
+    "DATASET_SUFFIX": ""
+  }
+}
