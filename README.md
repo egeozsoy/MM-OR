@@ -77,7 +77,8 @@ For scene graph generation segmentations are also used, but this is an additiona
 This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-whu/DVIS_Plus).
 
 ### Installation
-- Make sure you run `git lfs install` and `git lfs pull` to download the large files.
+
+- Download the relevant models from: https://huggingface.co/egeozsoy/MM-OR/tree/main/panoptic_segmentation/mask2former
 - cd into panoptic_segmentation dir
 - Run `pip install -r requirements.txt`. You might need to comment out the `detectron` line, and install it manually afterwards. Same for `panopticapi`.
 - Install `detectron` by running `pip install "git+https://github.com/facebookresearch/detectron2.git@v0.6#egg=detectron2"`.
@@ -102,7 +103,6 @@ This section builds upon the ORacle (https://github.com/egeozsoy/ORacle) and LLa
 
 
 ### Installation
-- Make sure you run `git lfs install` and `git lfs pull` to download the large files.
 - cd into scene_graph_generation dir
 - Run `pip install -r requirements.txt`.
 - Locally install llava by going into LLaVa folder and running `pip install -e .`
