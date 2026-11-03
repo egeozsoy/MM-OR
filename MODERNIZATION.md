@@ -457,26 +457,63 @@ stage 2 at step 500 (0.041), so they say nothing about where a full run ends up.
 show that the two stacks do not diverge in the first 200 steps.
 
 So the property that makes stage 2 drift away from what a bf16 merge can reproduce is already
-present in our stage-1 checkpoint. What made our stage 1 differ from the released one, the
-modern stack or our regenerated stage-1 data, is open. A stage-1 retraining in the original
-stack (82 h) would decide it, and the single-frame KL above tests the result within an hour
-instead of a full stage 2.
+present in our stage-1 checkpoint.
+
+#### Stage 1: an unlucky seed, not the stack or the data
+
+We then retrained stage 1 three more times and measured the checkpoints along the way
+(mean KL, single-frame inputs; released: 0.006):
+
+| stage-1 run | stack | LoRA init seed | batch order | 7,500 | 10,000 | 15,000 | final |
+|---|---|---|---|---|---|---|---|
+| ours | modern | 42 | seed 42 | 0.005 | 0.019 | 0.055 | 0.046 |
+| S1_baseline | **original** | 42 | seed 42 | 0.005 | 0.033 | stopped at 11,000 (0.041) | – |
+| S1_modern_seed7 | modern | **7** | seed 7 | 0.004 (8,500) | 0.005 | 0.008 | **0.0075** |
+| S1_seed7_order42 | modern | **7** | **seed 42** | 0.006 (7,000) | 0.010 | 0.011 | 0.012 |
+
+- **The stack is ruled out:** seed 42 drifts on the original stack too, from the same point.
+  (Both seed-42 runs saw the identical batch order; their training losses correlate at 0.99.)
+- **The regenerated stage-1 data is ruled out:** seed 7 on the same data ends at 0.0075,
+  close to the released 0.006.
+- **Batch order or starting weights:** the last run takes its starting weights from seed 7
+  and replays the seed-42 batch order. (The order is drawn from the global torch RNG, so
+  `--data_seed 42` does not reproduce it; we captured and replayed the RNG state.) It
+  rises a little where the seed-42 runs take off, between steps 9,000 and 10,000, then stays flat at
+  about 0.012. So the seed-42 order contributes a small bump. Most of the drift comes from
+  the seed-42 starting weights interacting with it.
+
+In practice, this is chance: some initialisations end up in a state that a bf16 merge cannot
+reproduce, and the Macro-F1 does not show it.
+
+**Stage 2 from the clean seed-7 stage-1** (run D: modern stack, seed 42, `MAX_GRAD_NORM=0`;
+mean KL, temporal inputs; released: 0.005):
+
+| stage-2 step | 2,000 | 4,000 | 5,000 | 6,000 | 6,500 | 7,500 | 8,500 | 9,000 | 9,500 | 10,000 | 10,500 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| original retraining | 0.009 | | 0.111 | | | 0.223 | | | | 0.223 | |
+| D | 0.005 | 0.006 | 0.013 | 0.012 | 0.007 | 0.007 | 0.009 | 0.043 | 0.011 | 0.034 | 0.015 |
+
+D does not drift like the original retraining: the divergence stays around 0.01, with single
+checkpoints spiking and returning, and remains an order of magnitude below the level where
+garbled bf16 output appeared (about 0.25). It still sits about 2× above the released model.
+Whether the fully trained D evaluates cleanly in bf16 is open.
 
 Practical consequences:
 
 - To train a temporal model that also evaluates in bf16, start stage 2 from the released
   stage-1 checkpoint: pass its directory as `--curriculum_learning_weights` (run B above).
 - Otherwise evaluate with `--load-4bit`.
-- Before spending 90 h on stage 2, check the stage-1 checkpoint: a mean KL near the
-  released 0.006 is a good sign, one well above it predicts the bf16 drift. (The measurement
-  script is not part of the repository.)
+- When retraining stage 1, check the checkpoint before spending 90 h on stage 2. A mean KL near the
+  released 0.006 is a good sign; one well above it predicts the bf16 drift. In that case,
+  retrain stage 1 with another `SEED`. The rise shows by step 10,000, about halfway through stage 1.
+  (The measurement script is not part of the repository.)
 
 ### Not yet verified
 
 - **Comparison against the paper's published table.** This verification establishes
   *original pipeline == modernized pipeline*. It does not establish *either == paper*.
   The 4D-OR takes run without segmasks (see §2), so they deviate from the paper's setup.
-- **Stage-1 training in the original stack.** Stage 2 in the original stack, started from
-  our stage-1 checkpoint, drifts like the modern one (§3, "Cause: our stage-1 checkpoint").
-  Whether a stage 1 trained in the original stack matches the released checkpoint is open.
+- **A fully retrained temporal model in bf16.** Stage 2 from a clean, retrained stage 1
+  (run D, §3) avoids the drift up to step 10,500, but has not been trained to the end and
+  evaluated in bf16.
 - **Downstream tasks.** Blocked by the missing `extract_metalabels_for_MMOR.py`.
