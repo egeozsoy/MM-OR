@@ -76,7 +76,7 @@ as well. Compare runs by take-level numbers within about ±0.01, not by exact eq
 | `ModuleNotFoundError: torch_scatter` / `open3d` | Code from `master`, not this branch. Check out `modernize/torch29-cu128`. |
 | `FileNotFoundError: .../mm_projector.bin` (or another loading error) | The checkpoint directory was renamed. The loader needs `llava` and `lora` in the directory name to load it as a LoRA adapter on top of `liuhaotian/llava-v1.5-7b`. |
 | Metrics far below §3, quietly | Missing modality folders are skipped without an error (§2). Check that the per-timepoint audio, transcript and segmask folders exist for the test takes. |
-| Temporal eval of a self-trained checkpoint crashes with a negative-dimension error after a few hundred samples, with garbled triplets (`anaesthetistmulticolor`, `Constra…`) in the output | Evaluate with `--load-4bit`. Merged into bf16, the QLoRA model can degenerate, and the temporal prompt (built from its own past predictions) then outgrows 2048 tokens. Starting stage 2 from the released stage-1 checkpoint avoids it. See §3, "Evaluating in 4-bit" and "Cause: our stage-1 checkpoint". |
+| Temporal eval of a self-trained checkpoint crashes with a negative-dimension error after a few hundred samples, with garbled triplets (`anaesthetistmulticolor`, `Constra…`) in the output | Evaluate with `--load-4bit`. Merged into bf16, the QLoRA model can degenerate, and the temporal prompt (built from its own past predictions) then outgrows 2048 tokens. Starting stage 2 from a clean stage-1 checkpoint (the released one, or a retrained one with low 4-bit/bf16 divergence) avoids it. See §3, "Evaluating in 4-bit" and "Cause: our stage-1 checkpoint". |
 | `CUDA driver version is insufficient` / `no kernel image is available` | The driver is too old for cu128 (`nvidia-smi` must report CUDA ≥ 12.8), or the GPU is older than the cu128 wheels support. Verified on A40 and RTX A6000 (sm_86). |
 
 ---
@@ -496,12 +496,29 @@ mean KL, temporal inputs; released: 0.005):
 D does not drift like the original retraining: the divergence stays around 0.01, with single
 checkpoints spiking and returning, and remains an order of magnitude below the level where
 garbled bf16 output appeared (about 0.25). It still sits about 2× above the released model.
-Whether the fully trained D evaluates cleanly in bf16 is open.
+
+The fully trained D (19,519 steps) on the full test set (4,338 samples):
+
+| temporal model | load mode | Macro-F1 | garbled entity names | completed |
+|---|---|---|---|---|
+| released | bf16 | 0.696 | 0 | yes |
+| released | 4-bit | 0.707 | 0 | yes |
+| original retraining | bf16 | – | 413 by sample 1,537 | no, crashed |
+| original retraining | 4-bit | 0.703 | 0 | yes |
+| **D** | **bf16** | **0.707** | 8 | yes |
+| D | 4-bit | 0.705 | 0 | yes |
+
+So with a clean stage 1, the modernized stack trains a temporal model that evaluates
+correctly in bf16, at the released model's score. The 8 garbled names
+(`nurseconstrain`, `head_surgeonmulticolitor`, …) are of the same kind as before, but
+about 100× rarer. They do not affect the score and do not derail the temporal prompt. The
+4-bit evaluation stays the cleaner choice for self-trained checkpoints.
 
 Practical consequences:
 
-- To train a temporal model that also evaluates in bf16, start stage 2 from the released
-  stage-1 checkpoint: pass its directory as `--curriculum_learning_weights` (run B above).
+- To train a temporal model that also evaluates in bf16, start stage 2 from a clean
+  stage-1 checkpoint: the released one, passed as `--curriculum_learning_weights` (run B
+  above), or a retrained one that passes the check below (run D).
 - Otherwise evaluate with `--load-4bit`.
 - When retraining stage 1, check the checkpoint before spending 90 h on stage 2. A mean KL near the
   released 0.006 is a good sign; one well above it predicts the bf16 drift. In that case,
@@ -513,7 +530,4 @@ Practical consequences:
 - **Comparison against the paper's published table.** This verification establishes
   *original pipeline == modernized pipeline*. It does not establish *either == paper*.
   The 4D-OR takes run without segmasks (see §2), so they deviate from the paper's setup.
-- **A fully retrained temporal model in bf16.** Stage 2 from a clean, retrained stage 1
-  (run D, §3) avoids the drift up to step 10,500, but has not been trained to the end and
-  evaluated in bf16.
 - **Downstream tasks.** Blocked by the missing `extract_metalabels_for_MMOR.py`.

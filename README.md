@@ -194,7 +194,7 @@ torch-scatter and open3d are no longer needed.
   --do_augment False
 ```
 - For temporal training instead, use the following command. Make sure to generate the corresponding json again using the first step, but you need to change the parameter ADD_TEMPORAL to True. Make sure to correctly point o the previous model in --curriculum_learning_weights:
-  - Note: our first stage-1 retraining led to a temporal model that only evaluates correctly with `--load-4bit`. The cause was an unlucky seed, on either the original or the modernized stack. Stage 2 started from the released stage-1 checkpoint, or from a stage 1 retrained with another seed, stays far closer to bf16. See "Cause: our stage-1 checkpoint" in [MODERNIZATION.md](MODERNIZATION.md).
+  - Note: our first stage-1 retraining led to a temporal model that only evaluates correctly with `--load-4bit`. The cause was an unlucky seed, on either the original or the modernized stack. Stage 2 started from the released stage-1 checkpoint, or from a stage 1 retrained with another seed, avoids the problem: such a model scored 0.707 Macro-F1 in bf16, the same as with `--load-4bit`. See "Cause: our stage-1 checkpoint" in [MODERNIZATION.md](MODERNIZATION.md).
 ```python
   python -m llava.train.train_mem \
   --lora_enable True \
