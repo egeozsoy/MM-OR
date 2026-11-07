@@ -1,20 +1,50 @@
-torch==2.0.1
-torchvision==0.15.2
-torchaudio==2.0.2
-transformers==4.31.0
-pytorch-lightning==2.1.2
+# MM-OR scene-graph generation, modernized stack (Python 3.12, torch 2.9.1 + CUDA 12.8): the
+# versions the published metrics were verified with. setup_env_modern.sh does all of this:
+#   pip install --index-url https://download.pytorch.org/whl/cu128 -r requirements-modern/torch.txt
+#   pip install -r requirements.txt
+#   pip install --no-deps -e LLaVA
+# torch is installed first, from the cu128 index, so pip does not pick a different build.
+# The original 2023 pins (torch 2.0.1, transformers 4.31) are in requirements-original.txt.
+#
+# Deliberately absent compared with requirements-original.txt:
+#   torch-scatter  replaced by native ATen ops (llava/model/multimodal_projector/native_ops.py)
+#   open3d         replaced by a built-in PCD reader (trimesh for the rest)
+#   flash-attn     installed separately from its release wheel, see setup_env_modern.sh
+
+transformers==4.57.6
+tokenizers==0.22.2
+accelerate==1.15.0
+peft==0.21.2
+bitsandbytes==0.50.2
+huggingface-hub==0.36.2
+safetensors==0.8.0
+sentencepiece==0.2.2
+
+numpy==2.2.6
+opencv-python==4.13.0.92
+scikit-image==0.26.0
+scikit-learn==1.9.1
+matplotlib==3.11.2
+trimesh==5.1.1
+timm==1.0.30
+einops==0.8.2
+einops-exts==0.0.4
+addict==2.4.0
+shortuuid==1.0.13
 json-tricks==3.17.3
-open3d==0.17.0
-accelerate==0.21.0
-bitsandbytes==0.41.0
-timm==0.6.13
-sentencepiece==0.1.99
-diffusers==0.25.0
-scikit-image==0.22.0
-opencv-python==4.9.0.80
-deepspeed==0.9.5
-flash-attn==2.3.4
 torchinfo==1.8.0
-wandb==0.16.0
-numpy==1.26.4
-# pip install -e . in LLaVA to install it locally, editable
+pytorch-lightning==2.6.6
+requests==2.34.2
+
+# Sparse convolutions for PointTransformerV3. cu126 is the newest line upstream publishes;
+# it runs under the cu128 torch.
+spconv-cu126==2.3.8
+
+# Training only (not needed for evaluation)
+deepspeed==0.19.7
+ninja==1.13.2
+wandb==0.30.0
+
+# Dataset preprocessing only (create_take_sample_*.py; the audio path also needs ffmpeg)
+pysrt==1.1.2
+pydub==0.25.1

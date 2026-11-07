@@ -33,14 +33,14 @@ if __name__ == '__main__':
     except FileNotFoundError:
         # Smaller models or model checkpoints saved by DeepSpeed.
         v = 'pytorch_model.bin'
-        for k in torch.load(os.path.join(args.model_path, v), map_location='cpu').keys():
+        for k in torch.load(os.path.join(args.model_path, v), map_location='cpu', weights_only=True).keys():
             if any(key_match in k for key_match in keys_to_match):
                 ckpt_to_key[v].append(k)
 
     loaded_weights = {}
 
     for ckpt_name, weight_keys in ckpt_to_key.items():
-        ckpt = torch.load(os.path.join(args.model_path, ckpt_name), map_location='cpu')
+        ckpt = torch.load(os.path.join(args.model_path, ckpt_name), map_location='cpu', weights_only=True)
         for k in weight_keys:
             loaded_weights[k] = ckpt[k]
 

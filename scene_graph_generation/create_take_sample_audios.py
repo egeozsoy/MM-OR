@@ -43,7 +43,10 @@ def main():
         JSON_PATH = MMOR_DATA_ROOT_PATH / 'take_jsons' / f'{take}.json'
         INPUT_PATH = MMOR_DATA_ROOT_PATH / 'take_audios' / f'{take}.mp3'
         EXPORT_PATH = MMOR_DATA_ROOT_PATH / 'take_audio_per_timepoint' / take
-        EXPORT_PATH.mkdir(exist_ok=True)
+        # parents=True: the release ships no take_audio_per_timepoint/ folder at all, so
+        # on a fresh dataset the parent never exists and every take failed with
+        # FileNotFoundError. The sibling create_take_sample_* scripts already pass it.
+        EXPORT_PATH.mkdir(exist_ok=True, parents=True)
 
         with JSON_PATH.open() as f:
             take_json = json.load(f)

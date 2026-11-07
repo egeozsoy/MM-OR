@@ -1,5 +1,7 @@
 from transformers import AutoConfig
 
+from llava.model.language_model.llava_llama import LLAVA_MM2SG_MODEL_TYPE
+
 
 def auto_upgrade(config):
     cfg = AutoConfig.from_pretrained(config)
@@ -11,7 +13,7 @@ def auto_upgrade(config):
         if confirm.lower() in ["y", "yes"]:
             print("Upgrading checkpoint...")
             assert len(cfg.architectures) == 1
-            setattr(cfg.__class__, "model_type", "llava")
+            setattr(cfg.__class__, "model_type", LLAVA_MM2SG_MODEL_TYPE)
             cfg.architectures[0] = 'LlavaLlamaForCausalLM'
             cfg.save_pretrained(config)
             print("Checkpoint upgraded.")

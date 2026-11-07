@@ -51,7 +51,7 @@ def apply_template(current_sg, all_scene_graphs_till_now, timepoint, sample_id, 
     return sample
 
 
-def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, with_temporal_aug=False):
+def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, with_temporal_aug=False, drop_history=0.5):
     samples = []
     take_timestamp_to_next_action_folder_path = MMOR_DATA_ROOT_PATH / 'take_timestamp_to_next_action'
     take_timestamp_to_robot_phase_path = MMOR_DATA_ROOT_PATH / 'take_timestamp_to_robot_phase'
@@ -150,11 +150,11 @@ def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, w
                 if p < 0.1:
                     memory_str = None
                 elif p < 0.25:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='short', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='short', DROP_HISTORY=drop_history)
                 elif p < 0.4:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='long', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='long', DROP_HISTORY=drop_history)
                 else:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='longshort', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='longshort', DROP_HISTORY=drop_history)
             else:
                 memory_str = memory_str_full
 
@@ -166,19 +166,38 @@ def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, w
     return samples
 
 
+
+def _drop_history(value):
+    """--drop-history accepts a float or the literal "false"."""
+    if str(value).lower() in ('false', 'none', 'off'):
+        return False
+    return float(value)
+
+
 def main():
-    N_PERM = 10  # 10 for quick experiments, 30 probably already optimal. 50 we could do but likely overkill.
-    WITH_TEMPORAL_AUG = True
-    DROP_HISTORY = 0.5  # either False or float
-    SPLIT = 'train'
+    # Previously hardcoded literals; defaults reproduce them exactly.
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--config', type=str, default='mmor.json', help='configuration file name. Relative path under given path')
+    parser.add_argument('--n-perm', dest='n_perm', type=int, default=10)
+    parser.add_argument('--no-temporal-aug', dest='with_temporal_aug', action='store_false', default=True)
+    parser.add_argument('--drop-history', dest='drop_history', type=_drop_history, default=0.5,
+                        help='history drop probability, or "false" to disable')
+    parser.add_argument('--split', type=str, default='train', choices=['train', 'val', 'test'])
+    parser.add_argument('--no-4dor', dest='load_4dor', action='store_false', default=True,
+                        help='build an MM-OR-only json (not paper-comparable)')
+    args = parser.parse_args()
+
+    N_PERM = args.n_perm
+    WITH_TEMPORAL_AUG = args.with_temporal_aug
+    DROP_HISTORY = args.drop_history
+    SPLIT = args.split
     NAME = f'downstream_task_{SPLIT}_{WITH_TEMPORAL_AUG}tempaug'
     if DROP_HISTORY is not False and DROP_HISTORY > 0.01:
         NAME += f'_drophistory{DROP_HISTORY}'
+    if not args.load_4dor:
+        NAME += '_no4dor'
     print(f'Creating samples for LLAVA dataset with name {NAME}')
 
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--config', type=str, default='mmor.json', help='configuration file name. Relative path under given path')
-    args = parser.parse_args()
     pl.seed_everything(42, workers=True)
     config = config_loader(args.config)
 
@@ -189,9 +208,10 @@ def main():
         use_fast=False,
     )
 
-    dataset = ORDataset(config, SPLIT)
+    dataset = ORDataset(config, SPLIT, load_4dor=args.load_4dor)
 
-    samples = generate_finetuning_samples_from_dataset(dataset, split=SPLIT, n_permutations=N_PERM, with_temporal_aug=WITH_TEMPORAL_AUG)
+    samples = generate_finetuning_samples_from_dataset(dataset, split=SPLIT, n_permutations=N_PERM, with_temporal_aug=WITH_TEMPORAL_AUG,
+                                                      drop_history=DROP_HISTORY)
     # randomly shuffle the samples
     shuffle(samples)
     with open(f'data/llava_samples/{NAME}.json', 'w') as f:

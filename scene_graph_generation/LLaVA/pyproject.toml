@@ -12,18 +12,33 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
 ]
+# Dependencies are intentionally NOT pinned here any more.
+#
+# Upstream pinned the whole 2023 stack (torch==2.0.1, transformers==4.31.0, pydantic<2,
+# gradio==3.35.2, ...) in this file, which means `pip install -e .` actively fights the
+# environment: on the modernized stack it tries to downgrade torch 2.9.1 -> 2.0.1.
+#
+# Versions are owned by the environment instead (../requirements.txt for the modernized
+# stack, ../requirements-original.txt for the original one), so the same source tree
+# installs into either stack. spconv is not listed because its package name depends on
+# the CUDA version (spconv-cu126, spconv-cu117, ...); the requirements files pin it.
+#
+# The web-demo extras (gradio, fastapi, uvicorn, httpx, markdown2) moved to the optional
+# "demo" extra: they are unused by MM-OR's training and evaluation paths, and gradio
+# 3.35's pydantic<2 pin is what dragged the old resolver into conflict.
 dependencies = [
-    "torch==2.0.1", "torchvision==0.15.2",
-    "transformers==4.31.0", "tokenizers>=0.12.1,<0.14", "sentencepiece==0.1.99", "shortuuid",
-    "accelerate==0.21.0", "peft==0.4.0", "bitsandbytes==0.41.0",
-    "pydantic<2,>=1", "markdown2[all]", "numpy", "scikit-learn==1.2.2",
-    "gradio==3.35.2", "gradio_client==0.2.9",
-    "requests", "httpx==0.24.0", "uvicorn", "fastapi",
-    "einops==0.6.1", "einops-exts==0.0.4", "timm==0.6.13",
+    "torch", "torchvision",
+    "transformers", "tokenizers", "sentencepiece", "shortuuid",
+    "accelerate", "peft", "bitsandbytes",
+    "numpy", "scikit-learn",
+    "requests",
+    "einops", "einops-exts", "timm",
+    "addict", "torchinfo",   # imported by multimodal_projector/pointtransformerv3.py
 ]
 
 [project.optional-dependencies]
-train = ["deepspeed==0.9.5", "ninja", "wandb"]
+train = ["deepspeed", "ninja", "wandb"]
+demo = ["gradio", "gradio_client", "fastapi", "uvicorn", "httpx", "markdown2[all]", "pydantic"]
 
 [project.urls]
 "Homepage" = "https://llava-vl.github.io"

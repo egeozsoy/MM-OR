@@ -1,8 +1,11 @@
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from pydub import AudioSegment
+from pydub.exceptions import CouldntDecodeError
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import ClapModel, ClapProcessor
@@ -25,7 +28,13 @@ class AudioDataset(Dataset):
 
     def __getitem__(self, idx):
         audio_path = self.audio_files[idx]
-        audio = AudioSegment.from_file(str(audio_path))
+        try:
+            audio = AudioSegment.from_file(str(audio_path))
+        except CouldntDecodeError:
+            # e.g. 008_PKA/003512.mp3: a truncated 555-byte final clip. Skip it; the
+            # dataloader already treats a missing embedding as "no audio" for that sample.
+            print(f'WARNING: could not decode {audio_path}, skipping')
+            return None
         audio = np.array(audio.get_array_of_samples())
         audio = self.clap_processor(audios=audio, return_tensors="pt", sampling_rate=48000)
         return {'audio': audio, 'filename': audio_path.stem}
@@ -34,15 +43,18 @@ class AudioDataset(Dataset):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     clap_model = ClapModel.from_pretrained("laion/larger_clap_general").to(device)
-    for take in tqdm(MMOR_TAKE_NAMES):
+    # Optional argv: take names to restrict to, so several processes can split the work.
+    for take in tqdm(sys.argv[1:] or MMOR_TAKE_NAMES):
         take_audio_samples_path = MMOR_DATA_ROOT_PATH / 'take_audio_per_timepoint' / take
         take_audio_embeddings_export_path = MMOR_DATA_ROOT_PATH / 'take_audio_embeddings_per_timepoint' / take
         take_audio_embeddings_export_path.mkdir(exist_ok=True, parents=True)
 
         take_audio_dataset = AudioDataset(take_audio_samples_path, take_audio_embeddings_export_path)
-        take_dataloader = DataLoader(take_audio_dataset, batch_size=1, shuffle=False, num_workers=1, collate_fn=lambda x: x, pin_memory=True)
+        take_dataloader = DataLoader(take_audio_dataset, batch_size=1, shuffle=False, num_workers=int(os.environ.get('EMB_NUM_WORKERS', 1)), collate_fn=lambda x: x, pin_memory=True)
         for batch in tqdm(take_dataloader, desc=f'Processing take {take}'):  # we don't currently support batchsize>1
             batch = batch[0]
+            if batch is None:
+                continue
             filename = batch['filename']
             export_file_path = take_audio_embeddings_export_path / f'{filename}.pt'
             if export_file_path.exists():

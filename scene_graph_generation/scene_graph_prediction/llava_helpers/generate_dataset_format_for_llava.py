@@ -164,14 +164,43 @@ def generate_finetuning_samples_from_dataset(dataset, n_permutations=1, mixed_mo
     return samples
 
 
+
+def _drop_history(value):
+    """--drop-history accepts a float or the literal "false"."""
+    if str(value).lower() in ('false', 'none', 'off'):
+        return False
+    return float(value)
+
+
 def main():
-    N_PERM = 20  # 10 for quick experiments, 30 probably already optimal.
-    ADD_TEMPORAL = False  # set to True to add temporal information, necessary for training the temporal model
-    WITH_TEMPORAL_AUG = True
-    DROP_HISTORY = 0.5  # either False or float
-    MIXED_MODALITIES = True
-    SPLIT = 'train'
-    MAKE_SIMPLER = False
+    # These were module-level literals edited by hand; they are flags now. Every default
+    # reproduces the previous hardcoded value, so NAME (and therefore the output filename)
+    # is unchanged when no flags are passed.
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--config', type=str, default='mmor.json', help='configuration file name. Relative path under given path')
+    parser.add_argument('--n-perm', dest='n_perm', type=int, default=20,
+                        help='scene-graph orderings per sample; 10 for quick experiments, 30 ~optimal')
+    parser.add_argument('--add-temporal', dest='add_temporal', action='store_true', default=False,
+                        help='add temporal information; required for the temporal model json')
+    parser.add_argument('--no-temporal-aug', dest='with_temporal_aug', action='store_false', default=True,
+                        help='disable temporal augmentation')
+    parser.add_argument('--drop-history', dest='drop_history', type=_drop_history, default=0.5,
+                        help='history drop probability, or "false" to disable')
+    parser.add_argument('--no-mixed-modalities', dest='mixed_modalities', action='store_false', default=True,
+                        help='disable mixed-modality sampling')
+    parser.add_argument('--split', type=str, default='train', choices=['train', 'val', 'test'])
+    parser.add_argument('--make-simpler', dest='make_simpler', action='store_true', default=False)
+    parser.add_argument('--no-4dor', dest='load_4dor', action='store_false', default=True,
+                        help='build an MM-OR-only json (not paper-comparable)')
+    args = parser.parse_args()
+
+    N_PERM = args.n_perm
+    ADD_TEMPORAL = args.add_temporal
+    WITH_TEMPORAL_AUG = args.with_temporal_aug
+    DROP_HISTORY = args.drop_history
+    MIXED_MODALITIES = args.mixed_modalities
+    SPLIT = args.split
+    MAKE_SIMPLER = args.make_simpler
     NAME = f'{SPLIT}_{N_PERM}perm_{ADD_TEMPORAL}temp_{WITH_TEMPORAL_AUG}tempaug_AZURE_SIMSTATION_TRACKERCAM_PC_AUDIO_SPEECH_ROBOTMETA_TRACKINGMETA_PREDSEGMASKS'
     if DROP_HISTORY is not False and DROP_HISTORY > 0.01:
         NAME += f'_drophistory{DROP_HISTORY}'
@@ -179,12 +208,11 @@ def main():
         NAME += '_MIXED'
     if MAKE_SIMPLER:
         NAME += '_SIMPLER'
+    if not args.load_4dor:
+        NAME += '_no4dor'
 
     print(f'Creating samples for LLAVA dataset with name {NAME}')
 
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--config', type=str, default='mmor.json', help='configuration file name. Relative path under given path')
-    args = parser.parse_args()
     pl.seed_everything(42, workers=True)
     config = config_loader(args.config)
 
@@ -195,7 +223,7 @@ def main():
         use_fast=False,
     )
 
-    dataset = ORDataset(config, SPLIT)
+    dataset = ORDataset(config, SPLIT, load_4dor=args.load_4dor)
 
     samples = generate_finetuning_samples_from_dataset(dataset, n_permutations=N_PERM, mixed_modalities=MIXED_MODALITIES, MAKE_SIMPLER=MAKE_SIMPLER)
     # Load the tokenizer which will be used
