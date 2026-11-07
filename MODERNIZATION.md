@@ -241,11 +241,15 @@ Fixes made to these scripts:
   uses the configured roots and the script's own location.
 - **`create_take_sample_audios.py`** called `mkdir` without `parents=True`, so it failed
   on a fresh dataset where the parent folder does not exist.
-- **Predicted segmasks (`PREDSEGMASKS`) do not need the panoptic-segmentation stack.**
-  MM-OR ships the DVIS++/CTVIS predictions per take as `panoptic_seg_<cam>_for_val/`,
-  already in the `TRACK_TO_METAINFO` palette. The script now uses them directly, with the
-  `pan_pred` layout as fallback. The output is 32×32 uint8 label maps named
-  `<ts>_<i>_GTFalse.png`, which is exactly what the dataloader expects with `USE_GT=false`.
+- **Predicted segmasks (`PREDSEGMASKS`) need the panoptic-segmentation stack.** The script
+  reads predictions from a local DVIS++/CTVIS inference run (`pan_pred`), as before. The
+  release does **not** contain predictions: its `panoptic_seg_<cam>_for_val/` folders are
+  renderings of the ground-truth annotations. The panoptic data loader writes them from
+  `segmentation_export_<cam>/` (`or4d_dataset.py`, `mmor_dataset.py`). Their file names
+  match `segmentation_export_<cam>/` one to one, including the interpolated masks, and their
+  pixels match the annotation exactly. `SEGMASK_FROM_RELEASED_GT=1` makes the script use
+  them anyway, with a warning, to reproduce the runs below (see "Segmask inputs in this
+  verification").
 - **Sharding and resuming.** Both the segmask and the audio-embedding scripts accept take
   names on argv.
   - Segmasks split work into (take, timestamp-shard) items (`SEGMASK_WORKERS`,
@@ -259,11 +263,23 @@ Fixes made to these scripts:
   the only one: every other take has full audio-embedding coverage, and this one timestamp
   has no audio embedding.
 - **`009_TKA`** has no segmentation source at all, so it has 0 segmasks, which is correct.
-- **4D-OR has no predicted segmasks.** The checkpoint is a `PREDSEGMASKS` model, but
-  4D-OR ships only GT masks. Predicted masks would require the CTVIS inference output,
-  which is not released. The 4D-OR test takes (`002`, `006`) are therefore evaluated
-  **without segmasks**. That is a deviation from the paper's setup, though identical for
-  both stacks.
+- **No predicted segmasks are released.** The checkpoint is a `PREDSEGMASKS` model, but
+  predicted masks require running the released DVIS++/CTVIS checkpoints (panoptic
+  segmentation part of this repository) over all frames.
+
+#### Segmask inputs in this verification
+
+All scene-graph runs in §3 used segmasks generated with the behaviour that is now
+`SEGMASK_FROM_RELEASED_GT=1`:
+
+- **MM-OR:** every test sample (2,960 of 2,960) and 10,350 of 11,591 training samples got
+  **ground-truth** masks in place of predicted ones.
+- **4D-OR:** no segmasks at all (the released `panoptic_seg_*_for_val` folders exist only for
+  MM-OR), in training and in testing.
+
+This was identical for both stacks, so the parity results hold. The absolute scores are
+**not** a predicted-segmask setting, however: MM-OR saw ground-truth segmentation, and
+4D-OR saw none. They are not comparable to the paper's numbers.
 - **Missing modalities are skipped silently.** `or_dataset.py` adds audio/segmask inputs
   only `if path.exists()`, so any run started before preprocessing finishes is a run with
   those modalities dropped. Evaluate only on a complete, frozen dataset.
@@ -303,6 +319,8 @@ Setup:
   on `liuhaotian/llava-v1.5-7b`.
 - Evaluated with `main.py --mode evaluate`, batch size 8, on one A40 per stack.
 - Same frozen dataset for both. Modern run with `MMOR_REQUIRE_FLASH_ATTN=1`.
+- Segmasks: ground truth for MM-OR, none for 4D-OR (see §2, "Segmask inputs in this
+  verification").
 - Runtime: baseline 2 h 16 min, modern 2 h 12 min.
 
 Relation Macro-F1:
@@ -546,5 +564,6 @@ Practical consequences:
 
 - **Comparison against the paper's published table.** This verification establishes
   *original pipeline == modernized pipeline*. It does not establish *either == paper*.
-  The 4D-OR takes run without segmasks (see §2), so they deviate from the paper's setup.
+  The segmask inputs deviate from the paper's setup: ground truth for MM-OR, none for 4D-OR
+  (see §2, "Segmask inputs in this verification").
 - **Downstream tasks.** Blocked by the missing `extract_metalabels_for_MMOR.py`.

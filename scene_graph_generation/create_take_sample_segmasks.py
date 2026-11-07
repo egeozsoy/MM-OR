@@ -82,6 +82,12 @@ def downsample_mask_preserve_classes(mask, OUTPUT_RES):
     return downsampled_mask
 
 
+# Opt-in: fill "predicted" segmasks from the released panoptic_seg_<cam>_for_val/ folders.
+# Those are renderings of the ground-truth annotations, so the result is NOT a
+# predicted-segmask setting; it exists only to reproduce runs that used them.
+FROM_RELEASED_GT = os.environ.get('SEGMASK_FROM_RELEASED_GT') == '1'
+
+
 def get_rgb_mask(mask):
     # Initialize mask_rgb directly with BGR format
     mask_rgb = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
@@ -147,14 +153,12 @@ def _segmask_helper(item, model_name, USE_GT=False, OUTPUT_RES=32):
                         # segmask = cv2.cvtColor(get_rgb_mask(segmask), cv2.COLOR_BGR2RGB)
                         segmasks.append(segmask)
                 else:
-                    # Released predictions first: MM-OR ships the panoptic predictions as
-                    # panoptic_seg_<cam>_for_val/ inside each take, already in the
-                    # TRACK_TO_METAINFO colour palette. Using them means scene-graph work
-                    # needs no local panoptic-segmentation inference run (and hence not the
-                    # torch-1.13 detectron2 stack) at all.
+                    # The released panoptic_seg_<cam>_for_val/ folders are ground-truth
+                    # renderings, not predictions (see MODERNIZATION.md, section 2). They are
+                    # only used when explicitly requested via SEGMASK_FROM_RELEASED_GT=1.
                     released = take_path / f'panoptic_seg_{c_idx}_for_val'
                     released_path = released / f'camera0{c_idx}_colorimage-{image_files["azure"]}.png'
-                    if released_path.exists():
+                    if FROM_RELEASED_GT and released_path.exists():
                         all_camera_parts = [released]
                     else:
                         all_camera_parts = (model_name / 'inference' / 'pan_pred').glob(f'{take_name}_{c_idx}_*')
@@ -237,7 +241,7 @@ def _segmask_helper(item, model_name, USE_GT=False, OUTPUT_RES=32):
 
 
 def main():
-    # Local DVIS++/CTVIS inference output (pan_pred). For MM-OR the released panoptic_seg_*_for_val predictions take precedence.
+    # Local DVIS++/CTVIS inference output (pan_pred), see the panoptic segmentation section of the README.
     seg_path = Path(__file__).resolve().parent.parent / 'panoptic_segmentation' / 'output_CTVIS_R50_HybridOR_withsimstation'
     USE_GT = False
     OUTPUT_RES = 32
@@ -246,6 +250,9 @@ def main():
     # SEGMASK_WORKERS / SEGMASK_SHARDS_PER_TAKE control parallelism.
     workers = int(os.environ.get('SEGMASK_WORKERS', 24))
     n_shards = int(os.environ.get('SEGMASK_SHARDS_PER_TAKE', 1))
+    if FROM_RELEASED_GT:
+        print('WARNING: SEGMASK_FROM_RELEASED_GT=1: MM-OR segmasks are taken from the released '
+              'panoptic_seg_*_for_val folders, which are ground-truth renderings, not predictions.')
     takes = sys.argv[1:] or (list(OR4D_TAKE_NAMES) + list(MMOR_TAKE_NAMES))
     items = [(t, s, n_shards) for t in takes for s in range(n_shards)]
     process_map(partial(_segmask_helper, model_name=seg_path, USE_GT=USE_GT, OUTPUT_RES=OUTPUT_RES), items, max_workers=workers, chunksize=1)

@@ -327,6 +327,8 @@ torch-scatter and open3d are no longer needed.
 5. Expected result for this checkpoint on the full test set: combined Macro-F1 about 0.69 (verified runs: 0.686 to 0.691;
    4D-OR about 0.90, MM-OR about 0.50). Evaluation is not bit-reproducible, so repeated runs differ by a few thousandths.
    Per-take numbers and the comparison with the original stack are in [MODERNIZATION.md](MODERNIZATION.md#3-verification).
+   These numbers were produced with ground-truth segmasks for MM-OR (`SEGMASK_FROM_RELEASED_GT=1`) and none for 4D-OR,
+   because the release contains no predicted segmentations; see [MODERNIZATION.md, section 2](MODERNIZATION.md#segmask-inputs-in-this-verification).
    The temporal checkpoint (`--config mmor_temporal_pred.json`) runs one sample at a time and takes about 5 hours.
 6. Checkpoints you trained yourself with the QLoRA recipe: add `--load-4bit`. This evaluates the model as it was trained
    (4-bit base, LoRA not merged) and avoids a failure where the temporal eval crashes on garbled predictions. It is slower
