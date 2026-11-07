@@ -48,15 +48,13 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--config', type=str, default='example.json', help='configuration file name. Relative path under given path')
     parser.add_argument('--model_path', type=str, default=None, help='path to model checkpoint')
-    # `mode` used to be a literal here with a TODO telling you to edit the source to
-    # reach infer/eval_all. Defaults preserve the previous behaviour exactly.
     parser.add_argument('--mode', choices=['evaluate', 'infer', 'eval_all'], default='evaluate',
                         help='evaluate: test split once. infer: dump predicted scene graphs to json. '
                              'eval_all: sweep every checkpoint under --model_path')
     parser.add_argument('--batch-size', dest='batch_size', type=int, default=8,
                         help='forced to 1 when the config sets temporality=PRED')
     # ORDataset defaults to load_4dor=True, which requires the 4D-OR dataset alongside
-    # MM-OR. ~26-32%% of the published labels are 4D-OR samples, so --no-4dor is not
+    # MM-OR. ~26-32% of the published labels are 4D-OR samples, so --no-4dor is not
     # comparable to the paper -- it exists for MM-OR-only runs.
     parser.add_argument('--no-4dor', dest='load_4dor', action='store_false', default=True,
                         help='skip the 4D-OR half of the HybridOR labels (not paper-comparable)')

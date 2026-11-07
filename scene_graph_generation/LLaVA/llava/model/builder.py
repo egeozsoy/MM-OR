@@ -24,12 +24,12 @@ from llava.model.language_model.llava_llama import LlavaConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 
 
-def _drop_training_quantization(cfg, load_8bit, load_4bit):
+def _drop_training_quantization(cfg):
     # QLoRA checkpoints save the bnb settings they were *trained* with in config.json.
     # transformers 4.31 ignored that when loading the base model, so the original
     # pipeline evaluated in bf16; 4.57 honors it and builds 4-bit layers that the
-    # bf16 base checkpoint never fills (left on meta): it takes the base for an already
-    # quantized checkpoint. Drop it always; load_8bit/load_4bit pass their own config.
+    # bf16 base checkpoint never fills (left on meta), i.e. it treats the bf16 base as an
+    # already quantized checkpoint. Drop it always; load_8bit/load_4bit pass their own config.
     if getattr(cfg, "quantization_config", None) is not None:
         del cfg.quantization_config
     return cfg
@@ -42,6 +42,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         kwargs['device_map'] = {"": device}
 
     if load_8bit:
+        # Unchanged from upstream and not verified on the modernized stack.
         kwargs['load_in_8bit'] = True
     elif load_4bit:
         # The QLoRA training setup (train.py): NF4 base with bf16 compute, projector and
@@ -67,7 +68,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         if 'lora' in model_name.lower() and model_base is not None:
             # LlavaConfig, not AutoConfig: released checkpoints say model_type "llava",
             # which transformers now resolves to its own native LlavaConfig.
-            lora_cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path), load_8bit, load_4bit)
+            lora_cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path))
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
 
             # entities = ["head surgeon", "assistant surgeon", "circulator", "nurse", "anaesthetist", "patient", "instrument table", "operating table",
@@ -119,7 +120,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             # this may be mm projector only
             print('Loading LLaVA from base model...')
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
-            cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path), load_8bit, load_4bit)
+            cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path))
             model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
 
             mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu', weights_only=True)

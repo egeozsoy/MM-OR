@@ -166,7 +166,7 @@ def generate_finetuning_samples_from_dataset(dataset, n_permutations=1, mixed_mo
 
 
 def _drop_history(value):
-    """--drop-history accepts a float or the literal "false" (upstream used `False`)."""
+    """--drop-history accepts a float or the literal "false"."""
     if str(value).lower() in ('false', 'none', 'off'):
         return False
     return float(value)
@@ -208,6 +208,8 @@ def main():
         NAME += '_MIXED'
     if MAKE_SIMPLER:
         NAME += '_SIMPLER'
+    if not args.load_4dor:
+        NAME += '_no4dor'
 
     print(f'Creating samples for LLAVA dataset with name {NAME}')
 

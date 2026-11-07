@@ -106,11 +106,6 @@ def _segmask_helper(item, model_name, USE_GT=False, OUTPUT_RES=32):
         take_path = MMOR_DATA_ROOT_PATH / take_folder
 
     if dataset_type == "MMOR":
-        # Was Path('MM-OR_data'), i.e. relative to the process CWD, which only resolves
-        # from the repo root -- while `from helpers.configurations import ...` at the top
-        # of this file requires CWD to be scene_graph_generation/. The two assumptions
-        # cannot both hold. Every other path in this function already uses the configured
-        # root, so use it here too.
         json_path = MMOR_DATA_ROOT_PATH / 'take_jsons' / f'{take_name}.json'
         # Read MMOR/Simstation JSON file for timestamps and image paths
         with json_path.open() as f:
@@ -242,7 +237,8 @@ def _segmask_helper(item, model_name, USE_GT=False, OUTPUT_RES=32):
 
 
 def main():
-    seg_path = Path('panoptic_segmentation/output_CTVIS_R50_HybridOR_withsimstation')
+    # Local DVIS++/CTVIS inference output (pan_pred). For MM-OR the released panoptic_seg_*_for_val predictions take precedence.
+    seg_path = Path(__file__).resolve().parent.parent / 'panoptic_segmentation' / 'output_CTVIS_R50_HybridOR_withsimstation'
     USE_GT = False
     OUTPUT_RES = 32
     # 4dor

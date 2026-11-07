@@ -1,15 +1,13 @@
 """
 Native-ATen replacements for the compiled third-party ops MM-OR depends on.
 
-Motivation (see docs/superpowers/specs/2026-10-13-mmor-modernization-design.md §6.1, §7.4):
-every custom CUDA op is a future TensorRT plugin, so dropping one now is worth more than
-the lines it saves. `torch_scatter` is the cheap win -- its entire surface in MM-OR is
-`segment_csr` at two call sites in pointtransformerv3.py, with reduce="max" and
+`torch_scatter` needs a compiled wheel per torch/CUDA version, and its entire surface in
+MM-OR is `segment_csr` at two call sites in pointtransformerv3.py, with reduce="max" and
 reduce="mean".
 
-These are validated elementwise against torch_scatter in the baseline env by
-The mssg parity harness (parity/ptv3_parity.py), and are written to stay ONNX-exportable: repeat_interleave,
-index_add_ and scatter_reduce_ all have ONNX representations.
+These were validated elementwise against torch_scatter on the original stack (see
+MODERNIZATION.md) and are written to stay ONNX-exportable: repeat_interleave, index_add_
+and scatter_reduce_ all have ONNX representations.
 """
 
 import torch

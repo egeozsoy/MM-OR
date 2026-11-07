@@ -16,11 +16,12 @@ classifiers = [
 #
 # Upstream pinned the whole 2023 stack (torch==2.0.1, transformers==4.31.0, pydantic<2,
 # gradio==3.35.2, ...) in this file, which means `pip install -e .` actively fights the
-# environment: in mmor-modern it tries to downgrade torch 2.9.1 -> 2.0.1.
+# environment: on the modernized stack it tries to downgrade torch 2.9.1 -> 2.0.1.
 #
 # Versions are owned by the environment instead (../requirements.txt for the modernized
 # stack, ../requirements-original.txt for the original one), so the same source tree
-# installs into the original stack, the modern training env and the Holoscan inference env. Only genuine lower bounds live here.
+# installs into either stack. spconv is not listed because its package name depends on
+# the CUDA version (spconv-cu126, spconv-cu117, ...); the requirements files pin it.
 #
 # The web-demo extras (gradio, fastapi, uvicorn, httpx, markdown2) moved to the optional
 # "demo" extra: they are unused by MM-OR's training and evaluation paths, and gradio
@@ -32,7 +33,7 @@ dependencies = [
     "numpy", "scikit-learn",
     "requests",
     "einops", "einops-exts", "timm",
-    "addict",   # imported directly by multimodal_projector/pointtransformerv3.py
+    "addict", "torchinfo",   # imported by multimodal_projector/pointtransformerv3.py
 ]
 
 [project.optional-dependencies]

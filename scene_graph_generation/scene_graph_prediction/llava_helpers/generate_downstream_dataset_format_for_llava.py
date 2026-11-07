@@ -51,7 +51,7 @@ def apply_template(current_sg, all_scene_graphs_till_now, timepoint, sample_id, 
     return sample
 
 
-def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, with_temporal_aug=False):
+def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, with_temporal_aug=False, drop_history=0.5):
     samples = []
     take_timestamp_to_next_action_folder_path = MMOR_DATA_ROOT_PATH / 'take_timestamp_to_next_action'
     take_timestamp_to_robot_phase_path = MMOR_DATA_ROOT_PATH / 'take_timestamp_to_robot_phase'
@@ -150,11 +150,11 @@ def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, w
                 if p < 0.1:
                     memory_str = None
                 elif p < 0.25:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='short', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='short', DROP_HISTORY=drop_history)
                 elif p < 0.4:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='long', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='long', DROP_HISTORY=drop_history)
                 else:
-                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='longshort', DROP_HISTORY=0.5)
+                    memory_str = surgery_sg_to_memory_str(surgery_sg_triplets_up_to_current, current_timepoint=timepoint, TEMPORAL_STYLE='longshort', DROP_HISTORY=drop_history)
             else:
                 memory_str = memory_str_full
 
@@ -168,7 +168,7 @@ def generate_finetuning_samples_from_dataset(dataset, split, n_permutations=1, w
 
 
 def _drop_history(value):
-    """--drop-history accepts a float or the literal "false" (upstream used `False`)."""
+    """--drop-history accepts a float or the literal "false"."""
     if str(value).lower() in ('false', 'none', 'off'):
         return False
     return float(value)
@@ -194,6 +194,8 @@ def main():
     NAME = f'downstream_task_{SPLIT}_{WITH_TEMPORAL_AUG}tempaug'
     if DROP_HISTORY is not False and DROP_HISTORY > 0.01:
         NAME += f'_drophistory{DROP_HISTORY}'
+    if not args.load_4dor:
+        NAME += '_no4dor'
     print(f'Creating samples for LLAVA dataset with name {NAME}')
 
     pl.seed_everything(42, workers=True)
@@ -208,7 +210,8 @@ def main():
 
     dataset = ORDataset(config, SPLIT, load_4dor=args.load_4dor)
 
-    samples = generate_finetuning_samples_from_dataset(dataset, split=SPLIT, n_permutations=N_PERM, with_temporal_aug=WITH_TEMPORAL_AUG)
+    samples = generate_finetuning_samples_from_dataset(dataset, split=SPLIT, n_permutations=N_PERM, with_temporal_aug=WITH_TEMPORAL_AUG,
+                                                      drop_history=DROP_HISTORY)
     # randomly shuffle the samples
     shuffle(samples)
     with open(f'data/llava_samples/{NAME}.json', 'w') as f:

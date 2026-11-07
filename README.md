@@ -105,7 +105,7 @@ This section builds upon the ORacle (https://github.com/egeozsoy/ORacle) and LLa
 
 
 ### Installation (modernized stack: Python 3.12, torch 2.9.1, CUDA 12.8)
-This branch (`modernize/torch29-cu128`) runs on a current stack and reproduces the original metrics; see
+The code runs on a current stack and reproduces the original metrics; see
 [MODERNIZATION.md](MODERNIZATION.md) for what changed and how it was verified. Requirements: Linux x86_64,
 an NVIDIA GPU with at least 24 GB of memory, a driver that supports CUDA 12.8 or newer, and Python 3.12.
 No CUDA toolkit or compiler is needed: everything installs from prebuilt wheels.
@@ -131,16 +131,16 @@ torch-scatter and open3d are no longer needed.
 
 ### Installation (original 2023 stack: torch 2.0.1, CUDA 11.8)
 - cd into scene_graph_generation dir
-- Run `pip install -r requirements-original.txt` (on `master` this file is still called `requirements.txt`).
+- Run `pip install -r requirements-original.txt` (the original 2023 pins; `requirements.txt` is the modernized stack).
 - Locally install llava by going into LLaVa folder and running `pip install -e .`
 - Potentially you need to explicitly install flash-attn like `pip install flash-attn --no-build-isolation`
 - Install the correct spconv version for pointtransformers by running `pip install spconv-cu117`. Make sure to install the correct version for your CUDA version.
 - Sometimes it might be necessary to force install the correct numpy version `pip install numpy==1.26.4`
 - Install torch_scatter by following the direction at: https://github.com/rusty1s/pytorch_scatter. If using conda/miniconda it can be as simple as `conda install pytorch-scatter -c pyg`
-- Some modalities need to be preprocessed before training. While our dataset already contains the preprocessed versions of these, if they are missing for whatever reason, you can use the following scripts to generate them `create_take_sample_audios.py`, `create_take_sample_audio_embeddings.py`, `create_take_sample_speech_transcripts.py`, `create_take_sample_segmasks.py` 
+- Some modalities need to be preprocessed before training. The released dataset does not contain all of the preprocessed versions (see [MODERNIZATION.md, section 2](MODERNIZATION.md#2-dataset-deviations-from-the-release-and-what-has-to-be-generated)); generate them with `create_take_sample_audios.py`, `create_take_sample_audio_embeddings.py`, `create_take_sample_speech_transcripts.py`, `create_take_sample_segmasks.py` 
 
 ### Training
-- For the training, we first need to generate the training json. To this end run `python -m scene_graph_prediction.llava_helpers.generate_dataset_format_for_llava`. Reading through this script is suggested, it has some parameters for adjusting number of samples via N_PERM, controling temporality and augmentations etc.
+- For the training, we first need to generate the training json. To this end run `python -m scene_graph_prediction.llava_helpers.generate_dataset_format_for_llava`. See `--help` for its options: the number of samples (`--n-perm`), temporality (`--add-temporal`), augmentations etc. The defaults produce the json used by the commands below.
 - Before your first training, you need to do `cd scene_graph_generation/LLaVA` and run `python -m llava.model.multimodal_projector.pointtransformerv3`. This will correctly initialize the point
   transformer weights.
 - Now with the training json ready, we can proceed to training. cd into the LLaVA folder and run:
@@ -193,8 +193,9 @@ torch-scatter and open3d are no longer needed.
   --multimodal_drop_prop 0.50 \
   --do_augment False
 ```
-- For temporal training instead, use the following command. Make sure to generate the corresponding json again using the first step, but you need to change the parameter ADD_TEMPORAL to True. Make sure to correctly point o the previous model in --curriculum_learning_weights:
-  - Note: our first stage-1 retraining led to a temporal model that only evaluates correctly with `--load-4bit`. The cause was an unlucky seed, on either the original or the modernized stack. Stage 2 started from the released stage-1 checkpoint, or from a stage 1 retrained with another seed, avoids the problem: such a model scored 0.707 Macro-F1 in bf16, the same as with `--load-4bit`. See "Cause: our stage-1 checkpoint" in [MODERNIZATION.md](MODERNIZATION.md).
+- For temporal training instead, use the following command. Make sure to generate the corresponding json again using the first step, with `--add-temporal`. Make sure to correctly point o the previous model in --curriculum_learning_weights:
+  - Note: in the modernization's retraining, the first stage-1 run led to a temporal model that only evaluates correctly with `--load-4bit`. The cause was an unlucky seed, on either the original or the modernized stack. Stage 2 started from the released stage-1 checkpoint, or from a stage 1 retrained with another seed, avoids the problem: such a model scored 0.707 Macro-F1 in bf16, the same as with `--load-4bit`. See [MODERNIZATION.md, "Cause: the stage-1 checkpoint"](MODERNIZATION.md#cause-the-stage-1-checkpoint).
+  - Note: on the modernized stack `--max_grad_norm 0.1` clips gradients. In the original stack it had no effect under bf16, so pass `--max_grad_norm 0` to reproduce the original training exactly (see MODERNIZATION.md).
 ```python
   python -m llava.train.train_mem \
   --lora_enable True \
@@ -322,7 +323,7 @@ torch-scatter and open3d are no longer needed.
        --model_path LLaVA/checkpoints/llava-v1.5-7b-task-lora_hybridor_qlora_20perm_AZURE_SIMSTATION_TRACKERCAM_PC_AUDIO_SPEECH_ROBOTMETA_TRACKINGMETA_PREDSEGMASKS_0.50drop_MIXED
    ```
    The first run downloads `liuhaotian/llava-v1.5-7b` and `openai/clip-vit-large-patch14-336` from Hugging Face (about 15 GB).
-   `--limit-val-batches 20` gives a quick check (a few minutes) before the full test set (543 batches, about 80 minutes on an A40/A6000).
+   `--limit-val-batches 20` gives a quick check (a few minutes) before the full test set (543 batches, about 2 h 15 min on an A40).
 5. Expected result for this checkpoint on the full test set: combined Macro-F1 about 0.69 (verified runs: 0.686 to 0.691;
    4D-OR about 0.90, MM-OR about 0.50). Evaluation is not bit-reproducible, so repeated runs differ by a few thousandths.
    Per-take numbers and the comparison with the original stack are in [MODERNIZATION.md](MODERNIZATION.md#3-verification).

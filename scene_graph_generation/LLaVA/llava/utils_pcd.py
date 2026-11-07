@@ -1,18 +1,11 @@
 """
 Minimal, dependency-free PCD reader — replaces open3d for MM-OR's point-cloud loading.
 
-Why not open3d: the pinned open3d 0.17 has no numpy-2 story and drags in dash/pydantic<2,
-and it is absent from the Holoscan deployment requirements. Why not trimesh (which *is* in
-the Holoscan set): it does not support the .pcd format at all
-(`NotImplementedError: file_type 'pcd' not supported`).
-
-Reading .pcd is only ever needed offline, for training and evaluation on the released
-dataset. The Holoscan live path receives point clouds over zenoh/iceoryx and never touches
-this module, so a small local reader removes a heavy dependency from every environment
-rather than trading it for another.
+Why not open3d: the pinned open3d 0.17 does not support numpy 2 and drags in
+dash/pydantic<2, only to read one simple file format. (trimesh does not read .pcd.)
 
 Validated byte-exact against `open3d.io.read_point_cloud` on the released 4D-OR
-pcds_sparse files; see scripts/verify_pcd_io.py.
+pcds_sparse files (see MODERNIZATION.md).
 
 Supports the variants the dataset actually uses, plus plain binary/ascii:
   DATA ascii | binary | binary_compressed, fields x y z [rgb], TYPE F, SIZE 4.

@@ -1,12 +1,12 @@
 # MM-OR modernization: changes and verification
 
-Branch `modernize/torch29-cu128` ports the MM2SG scene-graph pipeline from its original
+This change ports the MM2SG scene-graph pipeline from its original
 2023 stack to a current one, without changing what the model computes:
 
 | | original (baseline) | modernized |
 |---|---|---|
 | Python | 3.10 | 3.12 |
-| torch | 2.0.1 + cu118 | 2.9.1 + **cu128** (covers sm_86 … sm_120 / Blackwell) |
+| torch | 2.0.1 + cu118 | 2.9.1 + **cu128** (covers sm_80 … sm_120 / Blackwell) |
 | transformers | 4.31.0 | 4.57.6 |
 | numpy | 1.26 | 2.2.6 |
 | flash-attn | 2.3.4 | 2.8.3 (release wheel `cu12torch2.9cxx11abiTRUE-cp312`) |
@@ -54,8 +54,8 @@ versions.
   few transitive patch releases (certifi, tifffile, …).
 - **Same scores.** The README eval command on the released stage-1 checkpoint scores the
   same as the reference environment, within run-to-run noise.
-  - On the full test set, combined Macro-F1 was 0.687 on an RTX A6000, against 0.691 for
-    §3 on an A40.
+  - On the full test set, combined Macro-F1 was 0.687 on an RTX A6000, against 0.691 on an
+    A40 in the reference environment (§3).
   - Over 20 batches, both environments land in the same 0.880–0.885 spread.
 - **The PTv3 init file does not matter for evaluation.** Its content is random, but the
   checkpoint contains all 288 PointTransformerV3 parameters and buffers and overwrites
@@ -72,11 +72,11 @@ as well. Compare runs by take-level numbers within about ±0.01, not by exact eq
 |---|---|
 | `AssertionError: No weights found at .../pointtransformerv3_weights.pth` | The PTv3 init file is required even for evaluation. Run `cd LLaVA && python -m llava.model.multimodal_projector.pointtransformerv3` once, on a GPU. |
 | `RuntimeWarning: flash_attn not installed: PointTransformerV3 is falling back …` | flash-attn is missing, so results deviate from the verified numbers. Install the release wheel (see `setup_env_modern.sh`). Never `pip install flash-attn`: that compiles from source. |
-| pip tries to downgrade torch, or installs transformers 4.31 / numpy 1.26 | You installed `requirements-original.txt` (or `requirements.txt` from `master`), or ran a plain `pip install -e LLaVA`. Use `setup_env_modern.sh`, or `requirements.txt` from this branch and `pip install --no-deps -e LLaVA`. |
-| `ModuleNotFoundError: torch_scatter` / `open3d` | Code from `master`, not this branch. Check out `modernize/torch29-cu128`. |
+| pip tries to downgrade torch, or installs transformers 4.31 / numpy 1.26 | You installed `requirements-original.txt` (or the `requirements.txt` of a pre-modernization checkout), or ran a plain `pip install -e LLaVA`. Use `setup_env_modern.sh`, or `requirements.txt` and `pip install --no-deps -e LLaVA`. |
+| `ModuleNotFoundError: torch_scatter` / `open3d` | The code is from before the modernization; update the checkout. |
 | `FileNotFoundError: .../mm_projector.bin` (or another loading error) | The checkpoint directory was renamed. The loader needs `llava` and `lora` in the directory name to load it as a LoRA adapter on top of `liuhaotian/llava-v1.5-7b`. |
 | Metrics far below §3, quietly | Missing modality folders are skipped without an error (§2). Check that the per-timepoint audio, transcript and segmask folders exist for the test takes. |
-| Temporal eval of a self-trained checkpoint crashes with a negative-dimension error after a few hundred samples, with garbled triplets (`anaesthetistmulticolor`, `Constra…`) in the output | Evaluate with `--load-4bit`. Merged into bf16, the QLoRA model can degenerate, and the temporal prompt (built from its own past predictions) then outgrows 2048 tokens. Starting stage 2 from a clean stage-1 checkpoint (the released one, or a retrained one with low 4-bit/bf16 divergence) avoids it. See §3, "Evaluating in 4-bit" and "Cause: our stage-1 checkpoint". |
+| Temporal eval of a self-trained checkpoint crashes with a negative-dimension error after a few hundred samples, with garbled triplets (`anaesthetistmulticolor`, `Constra…`) in the output | Evaluate with `--load-4bit`. Merged into bf16, the QLoRA model can degenerate, and the temporal prompt (built from its own past predictions) then outgrows 2048 tokens. Starting stage 2 from a clean stage-1 checkpoint (the released one, or a retrained one with low 4-bit/bf16 divergence) avoids it. See §3, "Evaluating in 4-bit" and "Cause: the stage-1 checkpoint". |
 | `CUDA driver version is insufficient` / `no kernel image is available` | The driver is too old for cu128 (`nvidia-smi` must report CUDA ≥ 12.8), or the GPU is older than the cu128 wheels support. Verified on A40 and RTX A6000 (sm_86). |
 
 ---
@@ -91,7 +91,9 @@ The full rationale for each change is in its commit message. Summary:
   `"llava"`, so `AutoConfig.register` raised. Released checkpoints still declare `"llava"`
   and still load, because every load site now constructs `LlavaConfig` explicitly. Going
   through `AutoConfig` would return transformers' own config class and silently drop
-  MM-OR's custom fields.
+  MM-OR's custom fields. In the other direction, checkpoints saved by this code declare
+  `"llava_mm2sg"`; code from before the modernization loads them only after changing
+  `model_type` in their `config.json` back to `"llava"`.
 - **Cache API.** `llava_arch.py` read the KV-cache length with the pre-4.36 tuple layout.
   It now uses `Cache.get_seq_length()`, with the old indexing kept as a fallback.
 - **`forward()` accepts `cache_position` and `**kwargs`**, which `generate()` passes since 4.38.
@@ -143,7 +145,13 @@ The full rationale for each change is in its commit message. Summary:
   upcast before the token-weighted cross-entropy, as before.
 - **Seeding.** The Trainer seeds only in its `__init__`, after the image pooler and LoRA
   weights were randomly initialized, so no two original runs started from the same weights.
-  `train.py` seeds first, and `--data_seed` pins the length-grouped sampler's order.
+  `train.py` seeds first. `--data_seed` now seeds the length-grouped sampler's own
+  generator. Without it, as in the original code, the order is drawn from the global torch
+  RNG at the point the sampler is built, so it depends on everything that consumed random
+  numbers before (`--seed`, model construction).
+- **Attention in training.** The original `train_mem.py` patched Llama attention with a
+  hand-written flash-attn forward. Training now uses transformers' default attention (SDPA).
+  The training parity below covers this change.
 - **API drift:** `load_in_4bit` only via `quantization_config`; new signatures of
   `_get_train_sampler`, `compute_loss`, `_save_checkpoint`.
 
@@ -175,7 +183,9 @@ The full rationale for each change is in its commit message. Summary:
 ### Usability and robustness
 
 - **Former hardcoded literals are CLI flags now.** Every default reproduces the old value,
-  and the derived dataset filenames are verified byte-identical.
+  and the derived dataset filenames are verified byte-identical. With `--no-4dor`, the
+  dataset generators append `_no4dor` to the filename, so an MM-OR-only json does not
+  overwrite the default one.
   - `main.py`: `--mode`, `--batch-size`, `--no-4dor`, `--limit-val-batches`.
   - `generate_dataset_format_for_llava.py`: `--n-perm`, `--add-temporal`, `--split`,
     `--drop-history`, `--no-4dor`, and others.
@@ -225,10 +235,10 @@ generated with these scripts (run from `scene_graph_generation/`):
 
 Fixes made to these scripts:
 
-- **`create_take_sample_segmasks.py`** used bare `Path('MM-OR_data')` /
-  `Path('4D-OR_data')` for two of its paths. That only resolves with CWD at the repo root,
+- **`create_take_sample_segmasks.py`** used bare, CWD-relative paths (`Path('MM-OR_data')`,
+  `Path('4D-OR_data')`, `Path('panoptic_segmentation/...')`) for three of its paths. That only resolves with CWD at the repo root,
   while its imports need CWD at `scene_graph_generation/`, so both cannot hold. It now
-  uses the configured roots.
+  uses the configured roots and the script's own location.
 - **`create_take_sample_audios.py`** called `mkdir` without `parents=True`, so it failed
   on a fresh dataset where the parent folder does not exist.
 - **Predicted segmasks (`PREDSEGMASKS`) do not need the panoptic-segmentation stack.**
@@ -272,6 +282,8 @@ floor rather than bit-equality, because the sparse-conv and attention kernels ac
 with atomics.
 
 ### Component level
+
+The component checks used test scripts that are not part of the repository.
 
 | check | result |
 |---|---|
@@ -357,30 +369,33 @@ memory 22 GB vs 40 GB. A full stage-1 epoch (312,300 samples, 19,518 steps) take
 **Gradient clipping never ran in the original training.** DeepSpeed 0.9.5's ZeRO-1/2
 optimizer computes the gradient norm, and therefore clips, only for fp16
 (`if self.dtype == torch.float16`). Under bf16, `--max_grad_norm 0.1` was a no-op, and
-gradient norms of 2–4 went to Adam unclipped. DeepSpeed 0.19 does clip. The recipe flag
-is unchanged (`train_sgg.sh` defaults to 0.1). To reproduce the original training
-behaviour, pass `MAX_GRAD_NORM=0`. Clipping had no measurable effect on the 200-step
+gradient norms of 2–4 went to Adam unclipped. DeepSpeed 0.19 does clip. The README recipe still
+passes `--max_grad_norm 0.1`. To reproduce the original
+training behaviour, pass `--max_grad_norm 0`. Clipping had no measurable effect on the 200-step
 curves, which is expected: Adam is nearly invariant to a uniform gradient scale.
 
 ### Full training: stage 1 and temporal stage 2
 
-Setup: `train_sgg_full.sh` in the modern stack, the README recipe, one epoch per stage on one
-A40 (stage 1: 82 h, stage 2: 90 h), `MAX_GRAD_NORM=0` (no clipping, which is what the
-original bf16 training effectively did; checked in both stages' `training_args.bin`). Compared with the released checkpoints on the full test set, all
-modern stack:
+Setup: the README recipe in the modern stack, stage 1 followed by the temporal stage 2,
+one epoch per stage on one A40 (stage 1: 82 h, stage 2: 90 h), `--max_grad_norm 0` (no
+clipping, which is what the original bf16 training effectively did), `--seed 42`. Compared
+with the released checkpoints on the full test set, all modern stack:
 
 | model | eval load mode | combined Macro-F1 | 4D-OR | MM-OR |
 |---|---|---|---|---|
-| stage 1, released | bf16, merged | 0.687–0.691 | 0.894–0.899 | 0.498–0.500 |
-| stage 1, retrained | bf16, merged | 0.689 | 0.895 | 0.508 |
-| temporal, released | bf16, merged | 0.696 (original stack: 0.702) | | |
+| stage 1, released | bf16, merged | 0.686–0.691 | 0.894–0.899 | 0.498–0.500 |
+| stage 1, first retraining | bf16, merged | 0.689 | 0.895 | 0.508 |
+| temporal, released | bf16, merged | 0.696 (original stack: 0.702; one run each) | | |
 | temporal, released | 4-bit, unmerged | 0.707 | 0.896 | 0.532 |
-| temporal, retrained | bf16, merged | crashes (see below) | | |
-| temporal, retrained | **4-bit, unmerged** | **0.703** | 0.911 | 0.522 |
+| temporal, first retraining | bf16, merged | crashes (see below) | | |
+| temporal, first retraining | **4-bit, unmerged** | **0.703** | 0.911 | 0.522 |
+| temporal, retrained from a clean stage 1 (run D below) | bf16, merged | 0.707 | 0.912 | 0.540 |
+| temporal, retrained from a clean stage 1 (run D below) | 4-bit, unmerged | 0.705 | 0.910 | 0.537 |
 
 **Verdict: the modern stack reproduces the released checkpoints**, within the run-to-run
-spread of the eval (0.687–0.691 over three runs of the same checkpoint, see §3). The
-retrained temporal model has to be evaluated with `--load-4bit`, however.
+spread of the eval (0.686–0.691 over five runs of the same checkpoint, see "Installation"
+and the README). The first retrained temporal model has to be evaluated with
+`--load-4bit`, however. The cause is its stage-1 checkpoint, not the stack (see below).
 
 #### Evaluating in 4-bit
 
@@ -390,7 +405,7 @@ close to, but not the same as, the trained one.
 
 - **Released checkpoints:** the difference does not matter. Both modes run cleanly, and
   the temporal checkpoint scores 0.696 (bf16) and 0.707 (4-bit).
-- **Retrained temporal checkpoint:** in bf16 it occasionally emits garbled entity names
+- **First retrained temporal checkpoint:** in bf16 it occasionally emits garbled entity names
   (`anaesthetistmulticolor`, `Constra…`), 29 of the first 150 temporal predictions. The
   temporal config feeds the model's own past predictions back into the prompt, so the
   errors compound. Once the prompt exceeds 2048 tokens, it is truncated and the eval
@@ -402,9 +417,9 @@ the temporal config. Keep the default (bf16, merged) for comparisons with the pu
 numbers, which were produced that way. 4-bit is slower: the full temporal test set took
 11–12 h per checkpoint on an A40, against 5 h in bf16.
 
-#### Cause: our stage-1 checkpoint
+#### Cause: the stage-1 checkpoint
 
-To find out why the retrained temporal model breaks in bf16 and the released one does not,
+To find out why the first retrained temporal model breaks in bf16 and the released one does not,
 we measured how much a checkpoint's output changes between the two load modes. The
 checkpoint is loaded in 4-bit and generates on 109 test samples (every 40th). Teacher-forced
 on exactly those outputs, the token distributions of the 4-bit model and the bf16-merged
@@ -414,7 +429,7 @@ model are then compared:
 - **Noise floor:** the 4-bit model compared with itself. It is 0.0001 everywhere.
 - **Reference:** the released checkpoints, at 0.005 (temporal) and 0.006 (stage 1).
 
-The retrained temporal model's divergence over its training run:
+The first retrained temporal model's divergence over its training run:
 
 | stage-2 step | 500 | 2,000 | 3,500 | 5,000 | 7,500 | 10,000 | 12,500 | 15,000 |
 |---|---|---|---|---|---|---|---|---|
@@ -423,22 +438,22 @@ The retrained temporal model's divergence over its training run:
 
 The jump between steps 3,500 and 5,000 never reverses, and garbled output follows once the
 divergence passes about 0.25. To isolate the cause, we ran three more stage-2 trainings and
-stopped them at about step 5,500 (`MAX_GRAD_NORM=0`, data and recipe as above):
+stopped them at about step 5,500 (`--max_grad_norm 0`, data and recipe as above):
 
 | run | stack | stage-1 start | seed | mean KL at stage-2 step 2,000 / 3,500 / 5,000 / 5,500 |
 |---|---|---|---|---|
-| original retraining | modern | ours | 42 | 0.009 / 0.006 / **0.111** / – |
-| A | modern | ours | 7 | 0.011 / **0.087** / 0.086 / – |
+| first retraining | modern | first retrained | 42 | 0.009 / 0.006 / **0.111** / – |
+| A | modern | first retrained | 7 | 0.011 / **0.087** / 0.086 / – |
 | B | modern | **released** | 42 | 0.004 / 0.004 / 0.004 / 0.005 |
-| C | **original (2023)** | ours | 42 | 0.028 / 0.026 / 0.057 / **0.112** |
+| C | **original (2023)** | first retrained | 42 | 0.028 / 0.026 / 0.057 / **0.112** |
 
-Every run that started from our stage-1 checkpoint drifts, on either stack and with either
+Every run that started from the first retrained stage-1 checkpoint drifts, on either stack and with either
 seed. Only the onset varies, from about step 2,500 to 5,000. The run from the released
-stage-1 stays at the released model's level, on the modern stack and with our regenerated
+stage-1 stays at the released model's level, on the modern stack and with the regenerated
 stage-2 data. This rules out:
 
 - the modern stack (C drifts on the original one),
-- our regenerated stage-2 data (B uses it and stays clean),
+- the regenerated stage-2 data (B uses it and stays clean),
 - the seed (A drifts too),
 - gradient clipping (neither training clipped).
 
@@ -448,7 +463,7 @@ inputs (`mmor.json`), even though both score the same Macro-F1:
 | stage-1 checkpoint | mean KL, single-frame inputs | mean KL, temporal inputs |
 |---|---|---|
 | released | 0.006 | 0.014 |
-| ours (modern stack, 1 epoch) | 0.046 | 0.089 |
+| first retrained (modern stack, 1 epoch) | 0.046 | 0.089 |
 
 The 200-step stage-1 runs (§3, "Training: 200-step QLoRA runs") show no stack difference
 on single-frame inputs: 0.026 and 0.032 (original stack, seeds 42 and 7) against 0.026 and
@@ -457,27 +472,28 @@ stage 2 at step 500 (0.041), so they say nothing about where a full run ends up.
 show that the two stacks do not diverge in the first 200 steps.
 
 So the property that makes stage 2 drift away from what a bf16 merge can reproduce is already
-present in our stage-1 checkpoint.
+present in the first retrained stage-1 checkpoint.
 
 #### Stage 1: an unlucky seed, not the stack or the data
 
 We then retrained stage 1 three more times and measured the checkpoints along the way
 (mean KL, single-frame inputs; released: 0.006):
 
-| stage-1 run | stack | LoRA init seed | batch order | 7,500 | 10,000 | 15,000 | final |
+| stage-1 run | stack | `--seed` | batch order | 7,500 | 10,000 | 15,000 | final |
 |---|---|---|---|---|---|---|---|
-| ours | modern | 42 | seed 42 | 0.005 | 0.019 | 0.055 | 0.046 |
-| S1_baseline | **original** | 42 | seed 42 | 0.005 | 0.033 | stopped at 11,000 (0.041) | – |
-| S1_modern_seed7 | modern | **7** | seed 7 | 0.004 (8,500) | 0.005 | 0.008 | **0.0075** |
-| S1_seed7_order42 | modern | **7** | **seed 42** | 0.006 (7,000) | 0.010 | 0.011 | 0.012 |
+| first retraining | modern | 42 | global RNG after seed 42 | 0.005 | 0.019 | 0.055 | 0.046 |
+| S1_baseline | **original** | 42 | global RNG after seed 42 | 0.005 | 0.033 | stopped at 11,000 (0.041) | – |
+| S1_modern_seed7 | modern | **7** | `--data_seed 7` | 0.004 (8,500) | 0.005 | 0.008 | **0.0075** |
+| S1_seed7_order42 | modern | **7** | **replayed from the seed-42 runs** | 0.006 (7,000) | 0.010 | 0.011 | 0.012 |
 
 - **The stack is ruled out:** seed 42 drifts on the original stack too, from the same point.
   (Both seed-42 runs saw the identical batch order; their training losses correlate at 0.99.)
 - **The regenerated stage-1 data is ruled out:** seed 7 on the same data ends at 0.0075,
   close to the released 0.006.
 - **Batch order or starting weights:** the last run takes its starting weights from seed 7
-  and replays the seed-42 batch order. (The order is drawn from the global torch RNG, so
-  `--data_seed 42` does not reproduce it; we captured and replayed the RNG state.) It
+  and replays the seed-42 batch order. (The seed-42 runs drew their order from the
+  global torch RNG, without `--data_seed`, so `--data_seed 42` does not reproduce it; the
+  RNG state was captured and replayed with a temporary hook.) It
   rises a little where the seed-42 runs take off, between steps 9,000 and 10,000, then stays flat at
   about 0.012. So the seed-42 order contributes a small bump. Most of the drift comes from
   the seed-42 starting weights interacting with it.
@@ -485,15 +501,15 @@ We then retrained stage 1 three more times and measured the checkpoints along th
 In practice, this is chance: some initialisations end up in a state that a bf16 merge cannot
 reproduce, and the Macro-F1 does not show it.
 
-**Stage 2 from the clean seed-7 stage-1** (run D: modern stack, seed 42, `MAX_GRAD_NORM=0`;
+**Stage 2 from the clean seed-7 stage-1** (run D: modern stack, `--seed 42`, `--max_grad_norm 0`;
 mean KL, temporal inputs; released: 0.005):
 
 | stage-2 step | 2,000 | 4,000 | 5,000 | 6,000 | 6,500 | 7,500 | 8,500 | 9,000 | 9,500 | 10,000 | 10,500 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| original retraining | 0.009 | | 0.111 | | | 0.223 | | | | 0.223 | |
+| first retraining | 0.009 | | 0.111 | | | 0.223 | | | | 0.223 | |
 | D | 0.005 | 0.006 | 0.013 | 0.012 | 0.007 | 0.007 | 0.009 | 0.043 | 0.011 | 0.034 | 0.015 |
 
-D does not drift like the original retraining: the divergence stays around 0.01, with single
+D does not drift like the first retraining: the divergence stays around 0.01, with single
 checkpoints spiking and returning, and remains an order of magnitude below the level where
 garbled bf16 output appeared (about 0.25). It still sits about 2× above the released model.
 
@@ -503,8 +519,8 @@ The fully trained D (19,519 steps) on the full test set (4,338 samples):
 |---|---|---|---|---|
 | released | bf16 | 0.696 | 0 | yes |
 | released | 4-bit | 0.707 | 0 | yes |
-| original retraining | bf16 | – | 413 by sample 1,537 | no, crashed |
-| original retraining | 4-bit | 0.703 | 0 | yes |
+| first retraining | bf16 | – | 413 by sample 1,537 | no, crashed |
+| first retraining | 4-bit | 0.703 | 0 | yes |
 | **D** | **bf16** | **0.707** | 8 | yes |
 | D | 4-bit | 0.705 | 0 | yes |
 
@@ -522,8 +538,9 @@ Practical consequences:
 - Otherwise evaluate with `--load-4bit`.
 - When retraining stage 1, check the checkpoint before spending 90 h on stage 2. A mean KL near the
   released 0.006 is a good sign; one well above it predicts the bf16 drift. In that case,
-  retrain stage 1 with another `SEED`. The rise shows by step 10,000, about halfway through stage 1.
-  (The measurement script is not part of the repository.)
+  retrain stage 1 with another `--seed`. The rise shows by step 10,000, about halfway through stage 1.
+  (The measurement script is not part of the repository; the method is described at the
+  start of this section.)
 
 ### Not yet verified
 

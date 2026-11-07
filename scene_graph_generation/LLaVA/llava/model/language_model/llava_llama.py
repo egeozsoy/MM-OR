@@ -33,7 +33,6 @@ from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 # AutoConfig -- see llava/model/builder.py. PretrainedConfig.from_pretrained ignores a
 # mismatched model_type when the class is named directly.
 LLAVA_MM2SG_MODEL_TYPE = "llava_mm2sg"
-LEGACY_MODEL_TYPES = ("llava",)  # what pre-existing MM-OR/ORacle checkpoints say
 
 
 class LlavaConfig(LlamaConfig):

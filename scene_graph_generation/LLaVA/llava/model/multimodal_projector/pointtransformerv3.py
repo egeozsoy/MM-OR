@@ -15,10 +15,9 @@ from pathlib import Path
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
-# [mssg] was `import torch_scatter`. Its entire surface here is segment_csr at two call
-# sites (reduce="max" and reduce="mean"); compat.py picks torch_scatter when installed
-# and the native ATen replacement otherwise, so the modern and Holoscan envs need no
-# compiled scatter package. Validated against torch_scatter: exact for max, ~1e-7 mean.
+# segment_csr is the only torch_scatter op used here (reduce="max" and reduce="mean");
+# compat.py picks torch_scatter when installed and a native ATen replacement otherwise.
+# Validated against torch_scatter: exact for max, ~1e-7 for mean.
 from llava.model.multimodal_projector.compat import segment_csr
 from addict import Dict
 from timm.models.layers import DropPath
@@ -360,11 +359,9 @@ class SerializedAttention(PointModule):
                 upcast_softmax is False
             ), "Set upcast_softmax to False when enable Flash Attention"
             if flash_attn is None:
-                # The Holoscan deployment requirements contain no flash-attn, and no
-                # prebuilt wheel exists for torch 2.9 (upstream stops at torch2.8), so
-                # running without it is the deployment reality rather than an edge case.
-                # Fall back instead of dying -- but LOUDLY, because this is NOT a free
-                # swap: the non-flash path recomputes patch_size per layer
+                # flash-attn is an optional binary dependency, so fall back instead of
+                # dying -- but LOUDLY, because this is NOT a free swap: the non-flash
+                # path recomputes patch_size per layer
                 # (min(bincount, patch_size_max)) and therefore uses a different attention
                 # grouping. The model was trained with flash enabled, so this is a
                 # train/inference mismatch whose cost has to be measured, not assumed.

@@ -8,8 +8,8 @@
 # would load cleanly and then replace LlamaAttention.forward with an old-signature
 # function -- failing silently rather than loudly.
 #
-# Attention is now selected natively via `attn_implementation` ("sdpa" by default,
-# "flash_attention_2" when available); see llava/train/train.py.
+# Training now uses transformers' default attention implementation (SDPA). Training
+# parity with the original flash-attn patched stack is documented in MODERNIZATION.md.
 from llava.train.train import train
 
 if __name__ == "__main__":

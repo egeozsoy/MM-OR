@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
         --locked)        LOCKED=1; shift ;;
         --no-flash-attn) FLASH=0; shift ;;
         --no-ptv3-init)  PTV3_INIT=0; shift ;;
-        -h|--help)       sed -n '2,20p' "$0"; exit 0 ;;
+        -h|--help)       sed -n '2,19p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
