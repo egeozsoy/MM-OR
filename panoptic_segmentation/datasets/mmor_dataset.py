@@ -80,7 +80,13 @@ class MMORSegmentationDataset(ORSegmentationDataset):
                 for cam_idx in [1, 4, 5]:
                     take_camidx = f'{take_name}_{cam_idx}'
                     self.samples[take_camidx] = []
+                    seen_frames = set()
                     for _, camera_info in sorted(data['timestamps'].items(), key=lambda x: int(x[0])):
+                        # A few timestamps map to the same image as a neighbouring one. Keep it once: a frame
+                        # listed twice in a video is predicted twice and saved to the same pan_pred file.
+                        if camera_info['azure'] in seen_frames:
+                            continue
+                        seen_frames.add(camera_info['azure'])
                         rgb_path = take_path / 'colorimage' / f'camera0{cam_idx}_colorimage-{camera_info["azure"]}.jpg'
                         mask_path = take_path / f'segmentation_export_{cam_idx}' / f'{rgb_path.stem}.png'
                         interpolated_mask_path = take_path / f'segmentation_export_{cam_idx}' / f'{rgb_path.stem}_interpolated.png'
@@ -92,7 +98,11 @@ class MMORSegmentationDataset(ORSegmentationDataset):
                 for cam_idx in [0, 2, 3]:
                     take_camidx = f'{take_name}_simstation{cam_idx}'
                     self.samples[take_camidx] = []
+                    seen_frames = set()
                     for _, camera_info in sorted(data['timestamps'].items(), key=lambda x: int(x[0])):
+                        if camera_info['simstation'] in seen_frames:  # see above
+                            continue
+                        seen_frames.add(camera_info['simstation'])
                         simstation_rgb_path = take_path / 'simstation' / f'camera0{cam_idx}_{camera_info["simstation"]}.jpg'
                         simstation_mask_path = take_path / f'simstation_segmentation_export_{cam_idx}' / f'{simstation_rgb_path.stem}.png'
                         simstation_interpolated_mask_path = take_path / f'simstation_segmentation_export_{cam_idx}' / f'{simstation_rgb_path.stem}_interpolated.png'

@@ -154,6 +154,8 @@ class VPSEvaluator(DatasetEvaluator):
 
         video_id = inputs[0]["video_id_part"] if 'video_id_part' in inputs[0] else inputs[0]["video_id"]
         image_names = [inputs[0]['file_names'][idx] for idx in inputs[0]["frame_idx"]]
+        # predictions are saved as pan_pred/<video_id>/<frame>.png: a repeated frame would be written twice
+        assert len(set(image_names)) == len(image_names), f'{video_id}: repeated frames in the video'
         img_shape = outputs['image_size']
         pan_seg_result = outputs['pred_masks'].to(device)
         segments_infos = outputs['segments_infos']
