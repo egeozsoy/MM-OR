@@ -346,7 +346,7 @@ class VPSEvaluator(DatasetEvaluator):
         for nframes in [4, 8]:
             gt_pred_split_ = copy.deepcopy(gt_pred_split)
             vpq_all_, vpq_thing_, vpq_stuff_, results = vpq_compute_parallel(
-                gt_pred_split_, categories, nframes, self._output_dir, num_processes=12
+                gt_pred_split_, categories, nframes, self._output_dir, num_processes=int(os.environ.get("VPQ_NUM_PROCESSES", 12))
             )  # adjust num_processes to 1 if want to debug properly
             vpq_all.append(vpq_all_)
             vpq_thing.append(vpq_thing_)
