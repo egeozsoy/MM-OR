@@ -24,11 +24,11 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, List, Tuple
 
 import numpy as np
-import open3d as o3d
 import torch
 import transformers
 from PIL import Image
 from llava import conversation as conversation_lib
+from llava.utils_pcd import load_point_cloud
 from llava.constants import IGNORE_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.mm_utils import tokenizer_image_token
 from llava.model import *
@@ -85,7 +85,6 @@ class TrainingArguments(transformers.TrainingArguments):
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
     unfreeze_n_vision_tower_layers: Optional[int] = field(default=None)
-    mpt_attn_impl: Optional[str] = field(default="triton")
     model_max_length: int = field(
         default=512,
         metadata={
@@ -957,20 +956,19 @@ class LazySupervisedDataset(Dataset):
             vis_descriptor_embs = []
             for vis_knowledge_path in self.list_data_dict[i]['vis_knowledge_paths']:
                 vis_knowledge_path = os.path.join(os.path.dirname(os.getcwd()), vis_knowledge_path)
-                emb = torch.load(vis_knowledge_path, map_location='cpu')
+                emb = torch.load(vis_knowledge_path, map_location='cpu', weights_only=True)
                 vis_descriptor_embs.append(emb)
             data_dict['vis_descriptor_embs'] = vis_descriptor_embs
         if 'pc' in self.list_data_dict[i]:
             if not self.do_multimodal_augment or random.random() > self.multimodal_drop_prop:  # maybe include
                 pc_path = self.list_data_dict[i]['pc']
-                pc = o3d.io.read_point_cloud(pc_path)
-                pc = torch.from_numpy(np.concatenate([np.asarray(pc.points) / 1000, np.asarray(pc.colors)], axis=-1)).float()
+                pc = torch.from_numpy(load_point_cloud(pc_path)).float()
                 data_dict['pc'] = pc
                 potentially_included_modalities.add('pc')
         if 'audio' in self.list_data_dict[i]:
             if not self.do_multimodal_augment or random.random() > self.multimodal_drop_prop:  # maybe include
                 audio_embeeding_path = self.list_data_dict[i]['audio']
-                data_dict['audio'] = torch.load(audio_embeeding_path, map_location='cpu')
+                data_dict['audio'] = torch.load(audio_embeeding_path, map_location='cpu', weights_only=True)
                 potentially_included_modalities.add('audio')
         if 'segmasks' in self.list_data_dict[i]:
             # they are one channel images, read them accordingly
@@ -1054,7 +1052,7 @@ def load_model_weights(ref_model_path, peft_model, device):
     # Store the current requires_grad status
     original_requires_grad = {name: param.requires_grad for name, param in peft_model.named_parameters()}
 
-    non_lora_trainables = torch.load(os.path.join(ref_model_path, 'non_lora_trainables.bin'), map_location='cpu')
+    non_lora_trainables = torch.load(os.path.join(ref_model_path, 'non_lora_trainables.bin'), map_location='cpu', weights_only=True)
     non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
     if any(k.startswith('model.model.') for k in non_lora_trainables):
         non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
@@ -1092,6 +1090,9 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
+    # Trainer only seeds in its own __init__, after the model is built, so the randomly
+    # initialized parts (image pooler, LoRA A) differed on every run. Seed before building.
+    transformers.set_seed(training_args.seed)
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
     bnb_model_from_pretrained_args = {}
@@ -1099,8 +1100,8 @@ def train():
         from transformers import BitsAndBytesConfig
         bnb_model_from_pretrained_args.update(dict(
             device_map={"": training_args.device},
-            load_in_4bit=training_args.bits == 4,
-            load_in_8bit=training_args.bits == 8,
+            # load_in_4bit/8bit live only in quantization_config: transformers >=4.4x rejects
+            # them as separate kwargs alongside it, and 4.31 reads them from the config anyway.
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
@@ -1114,21 +1115,11 @@ def train():
         ))
 
     if model_args.vision_tower is not None:
-        if 'mpt' in model_args.model_name_or_path:
-            config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
-            config.attn_config['attn_impl'] = training_args.mpt_attn_impl
-            model = LlavaMPTForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                config=config,
-                cache_dir=training_args.cache_dir,
-                **bnb_model_from_pretrained_args
-            )
-        else:
-            model = LlavaLlamaForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                **bnb_model_from_pretrained_args
-            )
+        model = LlavaLlamaForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            **bnb_model_from_pretrained_args
+        )
 
     else:
         model = transformers.LlamaForCausalLM.from_pretrained(
@@ -1142,10 +1133,22 @@ def train():
     if model_args.freeze_backbone:
         model.model.requires_grad_(False)
 
+    # transformers >=4.35 applies gradient checkpointing to *every* submodule that supports it,
+    # including the nested CLIP vision encoder (4.31 only checkpointed the Llama model). With the
+    # default reentrant checkpointing, a checkpointed block whose input does not require grad
+    # yields no parameter gradients -- and CLIP's input comes from its frozen embeddings, so the
+    # unfrozen CLIP layers (--unfreeze_n_vision_tower_layers) silently received zero gradient.
+    # Non-reentrant checkpointing is numerically equivalent and propagates them. (4.31 has no
+    # gradient_checkpointing_kwargs and never checkpointed CLIP, so it needs nothing.)
+    gc_kwargs = {}
+    if training_args.gradient_checkpointing and hasattr(training_args, 'gradient_checkpointing_kwargs'):
+        training_args.gradient_checkpointing_kwargs = {'use_reentrant': False}
+        gc_kwargs = {'gradient_checkpointing_kwargs': training_args.gradient_checkpointing_kwargs}
+
     if training_args.bits in [4, 8]:
         from peft import prepare_model_for_kbit_training
         model.config.torch_dtype = (torch.float32 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing, **gc_kwargs)
 
     if training_args.gradient_checkpointing:
         if hasattr(model, "enable_input_require_grads"):
@@ -1174,21 +1177,13 @@ def train():
         rank0_print("Adding LoRA adapters...")
         model = get_peft_model(model, lora_config)
 
-    if 'mpt' in model_args.model_name_or_path:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
-            padding_side="right"
-        )
-    else:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
-            padding_side="right",
-            use_fast=False,
-        )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path,
+        cache_dir=training_args.cache_dir,
+        model_max_length=training_args.model_max_length,
+        padding_side="right",
+        use_fast=False,
+    )
 
         # entities =  ["head surgeon", "assistant surgeon", "circulator", "nurse", "anaesthetist", "patient", "instrument table", "operating table", "secondary table", "anesthesia equipment", "instrument"]
         # predicates = ["assisting", "cementing", "cleaning", "closeTo", "cutting", "drilling", "hammering", "holding", "lyingOn", "manipulating", "preparing", "sawing", "suturing", "touching"]
@@ -1298,7 +1293,7 @@ def train():
 
     summary(model, depth=5, col_names=['num_params', 'trainable'])
 
-    from llava.train.llama_patch import upcast_layer_for_flash_attention
+    from llava.train.dtype_utils import upcast_layer_for_flash_attention
     model = upcast_layer_for_flash_attention(model, torch.bfloat16)
     if model_args.vision_tower is not None:
         print('Reinit and upcast vision towers to bfloat16')

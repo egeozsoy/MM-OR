@@ -10,10 +10,14 @@ from transformers.trainer import (
     is_sagemaker_mp_enabled,
     get_parameter_names,
     has_length,
-    ALL_LAYERNORM_LAYERS,
-    ShardedDDPOption,
     logger,
 )
+# ALL_LAYERNORM_LAYERS moved out of transformers.trainer into transformers.pytorch_utils.
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+# ShardedDDPOption used to be imported here. transformers removed fairscale sharded-DDP
+# support entirely, along with TrainingArguments.sharded_ddp, so the two
+# `if self.sharded_ddp == ShardedDDPOption.SIMPLE` branches are gone. Neither was ever
+# taken by MM-OR: training is configured with DeepSpeed ZeRO-2 (scripts/zero2.json).
 
 
 def maybe_zero_3(param, ignore_status=False, name=None):
@@ -67,8 +71,8 @@ def get_modality_length_grouped_indices(lengths, batch_size, world_size, generat
     mm_indices, mm_lengths = zip(*[(i, l) for i, l in enumerate(lengths) if l > 0])
     lang_indices, lang_lengths = zip(*[(i, -l) for i, l in enumerate(lengths) if l < 0])
 
-    mm_shuffle = [mm_indices[i] for i in get_length_grouped_indices(mm_lengths, batch_size, world_size, generator=None)]
-    lang_shuffle = [lang_indices[i] for i in get_length_grouped_indices(lang_lengths, batch_size, world_size, generator=None)]
+    mm_shuffle = [mm_indices[i] for i in get_length_grouped_indices(mm_lengths, batch_size, world_size, generator=generator)]
+    lang_shuffle = [lang_indices[i] for i in get_length_grouped_indices(lang_lengths, batch_size, world_size, generator=generator)]
     megabatch_size = world_size * batch_size
     mm_megabatches = [mm_shuffle[i: i + megabatch_size] for i in range(0, len(mm_shuffle), megabatch_size)]
     lang_megabatches = [lang_shuffle[i: i + megabatch_size] for i in range(0, len(lang_shuffle), megabatch_size)]
@@ -133,7 +137,17 @@ class LengthGroupedSampler(Sampler):
 
 class LLaVATrainer(Trainer):
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # compute_loss below returns a per-batch mean and ignores num_items_in_batch, exactly
+        # as in transformers 4.31, where the Trainer then divides by gradient_accumulation_steps.
+        # transformers >=4.46 skips that division when the model's forward takes **kwargs
+        # (ours does), assuming the model normalizes itself -- which would scale every
+        # gradient by gradient_accumulation_steps. Restore the original normalization.
+        self.model_accepts_loss_kwargs = False
+
+    # num_items_in_batch: passed by transformers >=4.46, deliberately unused (see __init__).
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
@@ -153,7 +167,9 @@ class LLaVATrainer(Trainer):
         outputs = model(**inputs)
         if hasattr(outputs, 'modified_labels'):
             # Shift so that tokens < n predict n
-            shift_logits = outputs.logits[..., :-1, :].contiguous()
+            # .float(): transformers 4.31's Llama always returned fp32 logits; >=4.4x keeps the
+            # model dtype (bf16). Upcast so the loss is computed in fp32 as originally.
+            shift_logits = outputs.logits[..., :-1, :].float().contiguous()
             shift_labels = outputs.modified_labels[..., 1:].contiguous()
             # Flatten the tokens
             if self.vocab_weight is not None:
@@ -173,20 +189,29 @@ class LLaVATrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
-        if self.train_dataset is None or not has_length(self.train_dataset):
+    # transformers >=4.5x passes the dataset in; 4.31 calls it with no arguments.
+    def _get_train_sampler(self, train_dataset=None) -> Optional[torch.utils.data.Sampler]:
+        dataset = train_dataset if train_dataset is not None else self.train_dataset
+        if dataset is None or not has_length(dataset):
             return None
 
         if self.args.group_by_modality_length:
-            lengths = self.train_dataset.modality_lengths
+            lengths = dataset.modality_lengths
+            # The order is drawn from the global torch RNG by default, whose state after model
+            # init depends on library versions (e.g. how peft initializes LoRA). --data_seed
+            # pins it, so runs in different environments see identical batches.
+            generator = None
+            if self.args.data_seed is not None:
+                generator = torch.Generator().manual_seed(self.args.data_seed)
             return LengthGroupedSampler(
                 self.args.train_batch_size,
                 world_size=self.args.world_size * self.args.gradient_accumulation_steps,
                 lengths=lengths,
                 group_by_modality=True,
+                generator=generator,
             )
         else:
-            return super()._get_train_sampler()
+            return super()._get_train_sampler() if train_dataset is None else super()._get_train_sampler(train_dataset)
 
     def create_optimizer(self):
         """
@@ -196,8 +221,6 @@ class LLaVATrainer(Trainer):
         Trainer's init through `optimizers`, or subclass and override this method in a subclass.
         """
         if is_sagemaker_mp_enabled():
-            return super().create_optimizer()
-        if self.sharded_ddp == ShardedDDPOption.SIMPLE:
             return super().create_optimizer()
 
         opt_model = self.model
@@ -253,31 +276,25 @@ class LLaVATrainer(Trainer):
 
             optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
 
-            if self.sharded_ddp == ShardedDDPOption.SIMPLE:
-                self.optimizer = OSS(
-                    params=optimizer_grouped_parameters,
-                    optim=optimizer_cls,
-                    **optimizer_kwargs,
-                )
-            else:
-                self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
-                if optimizer_cls.__name__ == "Adam8bit":
-                    import bitsandbytes
+            self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+            if optimizer_cls.__name__ == "Adam8bit":
+                import bitsandbytes
 
-                    manager = bitsandbytes.optim.GlobalOptimManager.get_instance()
+                manager = bitsandbytes.optim.GlobalOptimManager.get_instance()
 
-                    skipped = 0
-                    for module in opt_model.modules():
-                        if isinstance(module, nn.Embedding):
-                            skipped += sum({p.data_ptr(): p.numel() for p in module.parameters()}.values())
-                            logger.info(f"skipped {module}: {skipped / 2 ** 20}M params")
-                            manager.register_module_override(module, "weight", {"optim_bits": 32})
-                            logger.debug(f"bitsandbytes: will optimize {module} in fp32")
-                    logger.info(f"skipped: {skipped / 2 ** 20}M params")
+                skipped = 0
+                for module in opt_model.modules():
+                    if isinstance(module, nn.Embedding):
+                        skipped += sum({p.data_ptr(): p.numel() for p in module.parameters()}.values())
+                        logger.info(f"skipped {module}: {skipped / 2 ** 20}M params")
+                        manager.register_module_override(module, "weight", {"optim_bits": 32})
+                        logger.debug(f"bitsandbytes: will optimize {module} in fp32")
+                logger.info(f"skipped: {skipped / 2 ** 20}M params")
 
         return self.optimizer
 
-    def _save_checkpoint(self, model, trial, metrics=None):
+    # transformers 4.31 passes (model, trial, metrics); >=4.4x drops metrics.
+    def _save_checkpoint(self, model, trial, *args, **kwargs):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
@@ -296,7 +313,7 @@ class LLaVATrainer(Trainer):
                 self.model.config.save_pretrained(output_dir)
                 torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
         else:
-            super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
+            super(LLaVATrainer, self)._save_checkpoint(model, trial, *args, **kwargs)
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):

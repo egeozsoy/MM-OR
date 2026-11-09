@@ -69,8 +69,14 @@ class OR4DSegmentationDataset(ORSegmentationDataset):
                 for cam_idx in [1, 2, 5]:
                     take_camidx = f'{take_name}_{cam_idx}'
                     self.samples[take_camidx] = []
+                    seen_frames = set()
                     for _, camera_info in sorted(data, key=lambda x: int(x[0])):
                         color_idx_str = camera_info[f'color_{cam_idx}']
+                        # A few timestamps map to the same image as a neighbouring one. Keep it once: a frame
+                        # listed twice in a video is predicted twice and saved to the same pan_pred file.
+                        if color_idx_str in seen_frames:
+                            continue
+                        seen_frames.add(color_idx_str)
                         rgb_path = take_path / f'colorimage/camera0{cam_idx}_colorimage-{color_idx_str}.jpg'
                         mask_path = take_path / f'segmentation_export_{cam_idx}' / f'{rgb_path.stem}.png'
                         interpolated_mask_path = take_path / f'segmentation_export_{cam_idx}' / f'{rgb_path.stem}_interpolated.png'

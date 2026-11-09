@@ -36,11 +36,13 @@ class SegmentationMapFeatureExtractor(nn.Module):
         The init in LLava is a bit weird and causes issues. Instead we will save a dict from a previously seperate run and use those to initialize. These weights are also random but init correctly
         :return:
         '''
-        save_path = Path(f'llava/model/multimodal_projector/segmentation_map_feature_extractor_withembeddings{self.use_embedding}.pt')
+        # Module-relative for the same reason as pointtransformerv3.py.
+        save_path = (Path(__file__).resolve().parent /
+                     f'segmentation_map_feature_extractor_withembeddings{self.use_embedding}.pt')
         if save_path.exists():
             # load the weights
             print(f'Loading SegmentationMapFeatureExtractor weights from {save_path}')
-            self.load_state_dict(torch.load(save_path), strict=True)
+            self.load_state_dict(torch.load(save_path, weights_only=True), strict=True)
 
         else:
             # instead save there the current weights

@@ -20,7 +20,19 @@ import warnings
 import torch
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.model import *
+from llava.model.language_model.llava_llama import LlavaConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
+
+
+def _drop_training_quantization(cfg):
+    # QLoRA checkpoints save the bnb settings they were *trained* with in config.json.
+    # transformers 4.31 ignored that when loading the base model, so the original
+    # pipeline evaluated in bf16; 4.57 honors it and builds 4-bit layers that the
+    # bf16 base checkpoint never fills (left on meta), i.e. it treats the bf16 base as an
+    # already quantized checkpoint. Drop it always; load_8bit/load_4bit pass their own config.
+    if getattr(cfg, "quantization_config", None) is not None:
+        del cfg.quantization_config
+    return cfg
 
 
 def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda"):
@@ -30,11 +42,17 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         kwargs['device_map'] = {"": device}
 
     if load_8bit:
+        # Unchanged from upstream and not verified on the modernized stack.
         kwargs['load_in_8bit'] = True
     elif load_4bit:
-        kwargs['load_in_4bit'] = True
+        # The QLoRA training setup (train.py): NF4 base with bf16 compute, projector and
+        # pooler left unquantized. The vision tower is built separately during training,
+        # so it is never quantized there either; here it is part of from_pretrained.
+        # load_in_4bit lives only in quantization_config (newer transformers reject both).
+        kwargs['torch_dtype'] = torch.bfloat16
         kwargs['quantization_config'] = BitsAndBytesConfig(
             load_in_4bit=True,
+            llm_int8_skip_modules=["mm_projector", "image_pooler", "vision_tower"],
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type='nf4'
@@ -48,7 +66,9 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             warnings.warn(
                 'There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged.')
         if 'lora' in model_name.lower() and model_base is not None:
-            lora_cfg_pretrained = AutoConfig.from_pretrained(model_path)
+            # LlavaConfig, not AutoConfig: released checkpoints say model_type "llava",
+            # which transformers now resolves to its own native LlavaConfig.
+            lora_cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path))
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
 
             # entities = ["head surgeon", "assistant surgeon", "circulator", "nurse", "anaesthetist", "patient", "instrument table", "operating table",
@@ -60,13 +80,14 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             print('Loading LLaVA from base model...')
             model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
             token_num, tokem_dim = model.lm_head.out_features, model.lm_head.in_features
-            if model.lm_head.weight.shape[0] != token_num:
+            # a 4-bit lm_head stores its weight packed, so its shape says nothing about the vocab
+            if not load_4bit and model.lm_head.weight.shape[0] != token_num:
                 model.lm_head.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
                 model.model.embed_tokens.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
 
             print('Loading additional LLaVA weights...')
             if os.path.exists(os.path.join(model_path, 'non_lora_trainables.bin')):
-                non_lora_trainables = torch.load(os.path.join(model_path, 'non_lora_trainables.bin'), map_location='cpu')
+                non_lora_trainables = torch.load(os.path.join(model_path, 'non_lora_trainables.bin'), map_location='cpu', weights_only=True)
             else:
                 # this is probably from HF Hub
                 from huggingface_hub import hf_hub_download
@@ -75,7 +96,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                         repo_id=repo_id,
                         filename=filename,
                         subfolder=subfolder)
-                    return torch.load(cache_file, map_location='cpu')
+                    return torch.load(cache_file, map_location='cpu', weights_only=True)
 
                 non_lora_trainables = load_from_hf(model_path, 'non_lora_trainables.bin')
             non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
@@ -86,34 +107,29 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             from peft import PeftModel
             print('Loading LoRA weights...')
             model = PeftModel.from_pretrained(model, model_path)
-            print('Merging LoRA weights...')
-            model = model.merge_and_unload()
+            if load_4bit:
+                # Keep the adapters separate: the model then computes exactly what it was
+                # trained as (LoRA on top of the NF4 base). Merging into a bf16 base gives a
+                # slightly different model; see MODERNIZATION.md, "Evaluating in 4-bit".
+                print('Keeping LoRA weights unmerged (4-bit base)...')
+            else:
+                print('Merging LoRA weights...')
+                model = model.merge_and_unload()
             print('Model is loaded...')
         elif model_base is not None:
             # this may be mm projector only
             print('Loading LLaVA from base model...')
-            if 'mpt' in model_name.lower():
-                if not os.path.isfile(os.path.join(model_path, 'configuration_mpt.py')):
-                    shutil.copyfile(os.path.join(model_base, 'configuration_mpt.py'), os.path.join(model_path, 'configuration_mpt.py'))
-                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=True)
-                cfg_pretrained = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-                model = LlavaMPTForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
-                cfg_pretrained = AutoConfig.from_pretrained(model_path)
-                model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
+            tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+            cfg_pretrained = _drop_training_quantization(LlavaConfig.from_pretrained(model_path))
+            model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
 
-            mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
+            mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu', weights_only=True)
             mm_projector_weights = {k: v.to(torch.bfloat16) for k, v in mm_projector_weights.items()}
             model.load_state_dict(mm_projector_weights, strict=False)
         else:
-            if 'mpt' in model_name.lower():
-                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
-                model = LlavaMPTForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
-                non_lora_trainables = None
+            tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+            model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
+            non_lora_trainables = None
     else:
         # Load language model
         if model_base is not None:
@@ -145,7 +161,10 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
-        model.resize_token_embeddings(len(tokenizer))
+        # Only when tokens were actually added: resizing touches lm_head, which fails on
+        # a 4-bit (non-floating-point) lm_head.
+        if model.get_input_embeddings().weight.shape[0] != len(tokenizer):
+            model.resize_token_embeddings(len(tokenizer))
 
         vision_tower = model.get_vision_tower()
         if not vision_tower.is_loaded:

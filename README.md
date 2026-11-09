@@ -78,7 +78,14 @@ This part of the repository contains the code for training and evaluating panopt
 For scene graph generation segmentations are also used, but this is an additional modality that can be skipped. Our paper provides results for both with and without segmentations.
 This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-whu/DVIS_Plus).
 
-### Installation
+### Installation (modernized stack: Python 3.12, torch 2.9.1, CUDA 12.8)
+
+- Download the relevant models from: https://huggingface.co/egeozsoy/MM-OR/tree/main/panoptic_segmentation/mask2former
+- cd into panoptic_segmentation dir
+- Run `./setup_env_modern.sh` (or `./setup_env_modern.sh --locked` for the exact verified package set). It creates `.venv-panoptic` and compiles detectron2 and the MSDeformAttn op, so it needs a CUDA 12.x toolkit (`--cuda-home`, 12.8 or newer for Blackwell GPUs). `./setup_env_modern.sh --help` lists the options.
+- This stack reproduces the original one's VPQ for all three released checkpoints; see [MODERNIZATION.md, §4](MODERNIZATION.md#4-panoptic-segmentation).
+
+### Installation (original stack: torch 1.13.1, CUDA 11.x)
 
 - Download the relevant models from: https://huggingface.co/egeozsoy/MM-OR/tree/main/panoptic_segmentation/mask2former
 - cd into panoptic_segmentation dir
@@ -96,26 +103,54 @@ This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-
 - For evaluation any model after training, use the `--eval-only MODEL.WEIGHTS PATH_TO_MODEL.pth`, instead of `--resume MODEL.WEIGHTS PATH_TO_MODEL.pth`. Otherwise the command is the same as the training command.
 - We include in the repository all three checkpoints, which you can directly use. (
   e.g https://huggingface.co/egeozsoy/MM-OR/tree/main/output_CTVIS_R50_HybridOR_withsimstation, https://huggingface.co/egeozsoy/MM-OR/tree/main/output_R50_HybridOR_temporal_online_withsimstation, https://huggingface.co/egeozsoy/MM-OR/resolve/main/DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation)
+- The evaluation scores against `datasets/<dataset>_ground_truth_<split>.json`, which is not part of the release. Build it once per split before the first evaluation: `python eval_from_preds.py --build-gt-only --dataset hybridor_panoptic_test`.
+- The evaluation first saves the predictions (`OUTPUT_DIR/inference/pred_<split>.json` and `pan_pred/`), then computes VPQ on the CPU (about 2 hours for the HybridOR test split, with the model still on the GPU). `python eval_from_preds.py OUTPUT_DIR/inference --dataset hybridor_panoptic_test` scores saved predictions again without a GPU; `VPQ_NUM_PROCESSES` sets the size of the scoring pool (default 12).
+- Example, released CTVIS checkpoint on the HybridOR test split: `python -u train_net_video.py --num-gpus 1 --config-file configs/dvis_Plus/HybridOR/CTVIS_r50.yaml --eval-only MODEL.WEIGHTS output_CTVIS_R50_HybridOR_withsimstation/model_final.pth OUTPUT_DIR output_eval_ctvis`. Expected VPQ: CTVIS 58.3, DVIS++ online 57.1, DVIS++ offline 60.6 (see [MODERNIZATION.md, §4](MODERNIZATION.md#4-panoptic-segmentation)).
+- The data loaders write `panoptic_seg_<cam>/` and `panoptic_seg_<cam>_for_val/` into every take folder of `../MM-OR_data` and `../4D-OR_data`, and caches into `mm-or_cache/` and `4d-or_cache/`. The dataset therefore has to be writable.
 - Running a full evaluation like this will likely be necessary if you want to use the segmentations for scene graph generation. Make sure to run it for train/val and eventually test splits.
-
 
 ## Scene Graph Generation
 This part of the repository contains the code for training and evaluating scene graph generation models. If you are only interested in the panoptic segmentation part, you can skip this part.
 This section builds upon the ORacle (https://github.com/egeozsoy/ORacle) and LLava (https://github.com/haotian-liu/LLaVA) repositories.
 
 
-### Installation
+### Installation (modernized stack: Python 3.12, torch 2.9.1, CUDA 12.8)
+The code runs on a current stack and reproduces the original metrics; see
+[MODERNIZATION.md](MODERNIZATION.md) for what changed and how it was verified. Requirements: Linux x86_64,
+an NVIDIA GPU with at least 24 GB of memory, a driver that supports CUDA 12.8 or newer, and Python 3.12.
+No CUDA toolkit or compiler is needed: everything installs from prebuilt wheels.
+```bash
+cd scene_graph_generation
+./setup_env_modern.sh          # creates ./.venv-mmor (see --help: --env, --python, --locked, --no-flash-attn)
+source .venv-mmor/bin/activate
+```
+The script installs torch from the cu128 index, the pinned packages in `requirements.txt`,
+the flash-attn 2.8.3 release wheel and LLaVA (editable), and creates the PointTransformerV3 init weights
+(this step needs a GPU). `--locked` installs the exact package set the metrics were verified with
+(`requirements-modern/lock.txt`). Doing the same by hand:
+```bash
+python3.12 -m venv .venv-mmor && source .venv-mmor/bin/activate
+pip install --index-url https://download.pytorch.org/whl/cu128 -r requirements-modern/torch.txt
+pip install -r requirements.txt
+pip install --no-deps https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+pip install --no-deps -e LLaVA
+(cd LLaVA && python -m llava.model.multimodal_projector.pointtransformerv3)
+```
+Install torch before `requirements.txt` as shown, and do not `pip install flash-attn`: that compiles it from source.
+torch-scatter and open3d are no longer needed.
+
+### Installation (original 2023 stack: torch 2.0.1, CUDA 11.8)
 - cd into scene_graph_generation dir
-- Run `pip install -r requirements.txt`.
+- Run `pip install -r requirements-original.txt` (the original 2023 pins; `requirements.txt` is the modernized stack).
 - Locally install llava by going into LLaVa folder and running `pip install -e .`
 - Potentially you need to explicitly install flash-attn like `pip install flash-attn --no-build-isolation`
 - Install the correct spconv version for pointtransformers by running `pip install spconv-cu117`. Make sure to install the correct version for your CUDA version.
 - Sometimes it might be necessary to force install the correct numpy version `pip install numpy==1.26.4`
 - Install torch_scatter by following the direction at: https://github.com/rusty1s/pytorch_scatter. If using conda/miniconda it can be as simple as `conda install pytorch-scatter -c pyg`
-- Some modalities need to be preprocessed before training. While our dataset already contains the preprocessed versions of these, if they are missing for whatever reason, you can use the following scripts to generate them `create_take_sample_audios.py`, `create_take_sample_audio_embeddings.py`, `create_take_sample_speech_transcripts.py`, `create_take_sample_segmasks.py` 
+- Some modalities need to be preprocessed before training. The released dataset does not contain all of the preprocessed versions (see [MODERNIZATION.md, section 2](MODERNIZATION.md#2-dataset-deviations-from-the-release-and-what-has-to-be-generated)); generate them with `create_take_sample_audios.py`, `create_take_sample_audio_embeddings.py`, `create_take_sample_speech_transcripts.py`, `create_take_sample_segmasks.py` 
 
 ### Training
-- For the training, we first need to generate the training json. To this end run `python -m scene_graph_prediction.llava_helpers.generate_dataset_format_for_llava`. Reading through this script is suggested, it has some parameters for adjusting number of samples via N_PERM, controling temporality and augmentations etc.
+- For the training, we first need to generate the training json. To this end run `python -m scene_graph_prediction.llava_helpers.generate_dataset_format_for_llava`. See `--help` for its options: the number of samples (`--n-perm`), temporality (`--add-temporal`), augmentations etc. The defaults produce the json used by the commands below.
 - Before your first training, you need to do `cd scene_graph_generation/LLaVA` and run `python -m llava.model.multimodal_projector.pointtransformerv3`. This will correctly initialize the point
   transformer weights.
 - Now with the training json ready, we can proceed to training. cd into the LLaVA folder and run:
@@ -168,7 +203,9 @@ This section builds upon the ORacle (https://github.com/egeozsoy/ORacle) and LLa
   --multimodal_drop_prop 0.50 \
   --do_augment False
 ```
-- For temporal training instead, use the following command. Make sure to generate the corresponding json again using the first step, but you need to change the parameter ADD_TEMPORAL to True. Make sure to correctly point o the previous model in --curriculum_learning_weights:
+- For temporal training instead, use the following command. Make sure to generate the corresponding json again using the first step, with `--add-temporal`. Make sure to correctly point o the previous model in --curriculum_learning_weights:
+  - Note: in the modernization's retraining, the first stage-1 run led to a temporal model that only evaluates correctly with `--load-4bit`. The cause was an unlucky seed, on either the original or the modernized stack. Stage 2 started from the released stage-1 checkpoint, or from a stage 1 retrained with another seed, avoids the problem: such a model scored 0.707 Macro-F1 in bf16, the same as with `--load-4bit`. See [MODERNIZATION.md, "Cause: the stage-1 checkpoint"](MODERNIZATION.md#cause-the-stage-1-checkpoint).
+  - Note: on the modernized stack `--max_grad_norm 0.1` clips gradients. In the original stack it had no effect under bf16, so pass `--max_grad_norm 0` to reproduce the original training exactly (see MODERNIZATION.md).
 ```python
   python -m llava.train.train_mem \
   --lora_enable True \
@@ -273,3 +310,54 @@ This section builds upon the ORacle (https://github.com/egeozsoy/ORacle) and LLa
 - You can either train the models yourself our use our pretrained models.
 - To evaluate a non temporal model run: `python -u -m scene_graph_prediction.main --config mmor.json --model_path LLaVA/checkpoints/llava-v1.5-7b-task-lora_hybridor_qlora_20perm_AZURE_SIMSTATION_TRACKERCAM_PC_AUDIO_SPEECH_ROBOTMETA_TRACKINGMETA_PREDSEGMASKS_0.50drop_MIXED`. Make sure the model paths match.
 - To evaluate a temporal model run: `python -u -m scene_graph_prediction.main --config mmor_temporal_pred.json --model_path LLaVA/checkpoints/llava-v1.5-7b-task-lora_hybridor_qlora_20perm_AZURE_SIMSTATION_TRACKERCAM_PC_AUDIO_SPEECH_ROBOTMETA_TRACKINGMETA_PREDSEGMASKS_0.50drop_MIXED_temporal_curriculum`. Make sure the model paths match.
+
+#### Evaluating the published checkpoints, step by step (modernized stack)
+1. Install the environment as described in [Installation (modernized stack)](#installation-modernized-stack-python-312-torch-291-cuda-128).
+   Evaluation needs `LLaVA/llava/model/multimodal_projector/pointtransformerv3_weights.pth`, which
+   `setup_env_modern.sh` creates. Without it, building the model fails with `AssertionError: No weights found at ...`
+   even though the checkpoint replaces these weights afterwards.
+2. Link the data at the repository root: `MM-OR_data` must point at the directory that directly contains the take
+   folders (`001_PKA`, ..., `take_jsons`), and `4D-OR_data` at the 4D-OR dataset; the test set includes two 4D-OR takes.
+   Add `--no-4dor` for an MM-OR-only run. The per-timepoint modality folders (audio, transcripts, segmasks) are not part
+   of the download and have to be generated first; see [MODERNIZATION.md, section 2](MODERNIZATION.md#2-dataset-deviations-from-the-release-and-what-has-to-be-generated).
+3. Download the checkpoints and unzip them so that each one is a directory directly under `LLaVA/checkpoints/`:
+   ```bash
+   huggingface-cli download egeozsoy/MM-OR --include 'checkpoints/*' --local-dir LLaVA/_hf
+   for z in LLaVA/_hf/checkpoints/*.zip; do unzip -n "$z" -d LLaVA/checkpoints/; done
+   ```
+   Keep the directory names: the loader decides from the name (it must contain `llava` and `lora`) that the checkpoint
+   is a LoRA adapter on top of `liuhaotian/llava-v1.5-7b`.
+4. Run from `scene_graph_generation/`, with the venv active:
+   ```bash
+   CUDA_VISIBLE_DEVICES=0 python -u -m scene_graph_prediction.main --config mmor.json \
+       --model_path LLaVA/checkpoints/llava-v1.5-7b-task-lora_hybridor_qlora_20perm_AZURE_SIMSTATION_TRACKERCAM_PC_AUDIO_SPEECH_ROBOTMETA_TRACKINGMETA_PREDSEGMASKS_0.50drop_MIXED
+   ```
+   The first run downloads `liuhaotian/llava-v1.5-7b` and `openai/clip-vit-large-patch14-336` from Hugging Face (about 15 GB).
+   `--limit-val-batches 20` gives a quick check (a few minutes) before the full test set (543 batches, about 2 h 15 min on an A40).
+5. Expected result for this checkpoint on the full test set: combined Macro-F1 about 0.69 (verified runs: 0.686 to 0.691;
+   4D-OR about 0.90, MM-OR about 0.50). Evaluation is not bit-reproducible, so repeated runs differ by a few thousandths.
+   Per-take numbers and the comparison with the original stack are in [MODERNIZATION.md](MODERNIZATION.md#3-verification).
+   These numbers were produced with ground-truth segmasks for MM-OR (`SEGMASK_FROM_RELEASED_GT=1`) and none for 4D-OR,
+   because the release contains no predicted segmentations; see [MODERNIZATION.md, section 2](MODERNIZATION.md#segmask-inputs-in-this-verification).
+   The temporal checkpoint (`--config mmor_temporal_pred.json`) runs one sample at a time and takes about 5 hours.
+6. Checkpoints you trained yourself with the QLoRA recipe: add `--load-4bit`. This evaluates the model as it was trained
+   (4-bit base, LoRA not merged) and avoids a failure where the temporal eval crashes on garbled predictions. It is slower
+   (11–12 hours for the temporal test set). Details in [MODERNIZATION.md, "Evaluating in 4-bit"](MODERNIZATION.md#evaluating-in-4-bit).
+7. GPUs with 24 GB (e.g. RTX 4500 Ada, RTX 4090, RTX 3090): the default batch size of 8 fits, but only just. Use batch size 4
+   and the expandable-segments allocator instead:
+   ```bash
+   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0 python -u -m scene_graph_prediction.main \
+       --config mmor.json --batch-size 4 --model_path LLaVA/checkpoints/<checkpoint>
+   ```
+   Peak GPU memory, measured on the full test set with PyTorch capped at 22.5 GiB (used / incl. allocator cache):
+
+   | run | peak GPU memory | Macro-F1 |
+   |---|---|---|
+   | single frame, batch 8 (default) | 18.4 / 22.5 GiB (cache at the cap) | 0.686 |
+   | single frame, batch 4, expandable segments | 15.9 / 16.5 GiB | 0.689 |
+   | temporal (always batch 1), bf16 | 14.5 / 15.1 GiB | |
+   | temporal, `--load-4bit` | 6.4 / 6.8 GiB | |
+
+   The batch size does not change the scores beyond the run-to-run spread. If the machine is short on system RAM (the
+   eval uses up to about 15 GB with the default 8 data-loader workers), lower `NUM_WORKERS` in
+   `scene_graph_prediction/scene_graph_helpers/configs/mmor.json` and `mmor_temporal_pred.json`.

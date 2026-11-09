@@ -1,0 +1,6 @@
+# PyTorch for the modernized stack. Install from the CUDA 12.8 index:
+#   pip install --index-url https://download.pytorch.org/whl/cu128 -r requirements-modern/torch.txt
+# cu128 covers sm_80 ... sm_120 (A100, A40, RTX 30xx/40xx, H100, Blackwell) and runs on any
+# driver that supports CUDA >= 12.8.
+torch==2.9.1
+torchvision==0.24.1

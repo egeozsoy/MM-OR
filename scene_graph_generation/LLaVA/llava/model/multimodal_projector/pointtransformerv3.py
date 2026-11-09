@@ -15,7 +15,10 @@ from pathlib import Path
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
-import torch_scatter
+# segment_csr is the only torch_scatter op used here (reduce="max" and reduce="mean");
+# compat.py picks torch_scatter when installed and a native ATen replacement otherwise.
+# Validated against torch_scatter: exact for max, ~1e-7 for mean.
+from llava.model.multimodal_projector.compat import segment_csr
 from addict import Dict
 from timm.models.layers import DropPath
 from torchinfo import summary
@@ -355,9 +358,32 @@ class SerializedAttention(PointModule):
             assert (
                 upcast_softmax is False
             ), "Set upcast_softmax to False when enable Flash Attention"
-            assert flash_attn is not None, "Make sure flash_attn is installed."
-            self.patch_size = patch_size
-            self.attn_drop = attn_drop
+            if flash_attn is None:
+                # flash-attn is an optional binary dependency, so fall back instead of
+                # dying -- but LOUDLY, because this is NOT a free swap: the non-flash
+                # path recomputes patch_size per layer
+                # (min(bincount, patch_size_max)) and therefore uses a different attention
+                # grouping. The model was trained with flash enabled, so this is a
+                # train/inference mismatch whose cost has to be measured, not assumed.
+                # Set MMOR_REQUIRE_FLASH_ATTN=1 to hard-fail here instead.
+                import os as _os
+                import warnings as _warnings
+                if _os.environ.get("MMOR_REQUIRE_FLASH_ATTN") == "1":
+                    raise AssertionError(
+                        "flash_attn is not installed and MMOR_REQUIRE_FLASH_ATTN=1")
+                _warnings.warn(
+                    "flash_attn not installed: PointTransformerV3 is falling back to "
+                    "enable_flash=False. This changes the attention grouping and so the "
+                    "numerics; it is not equivalent to the trained configuration.",
+                    RuntimeWarning, stacklevel=2)
+                enable_flash = False
+                self.enable_flash = False
+                self.patch_size_max = patch_size
+                self.patch_size = 0
+                self.attn_drop = torch.nn.Dropout(attn_drop)
+            else:
+                self.patch_size = patch_size
+                self.attn_drop = attn_drop
         else:
             # when disable flash attention, we still don't want to use mask
             # consequently, patch size will auto set to the
@@ -683,10 +709,10 @@ class SerializedPooling(PointModule):
 
         # collect information
         point_dict = Dict(
-            feat=torch_scatter.segment_csr(
+            feat=segment_csr(
                 self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
             ),
-            coord=torch_scatter.segment_csr(
+            coord=segment_csr(
                 point.coord[indices], idx_ptr, reduce="mean"
             ),
             grid_coord=point.grid_coord[head_indices] >> pooling_depth,
@@ -972,11 +998,14 @@ class PointTransformerV3(PointModule):
         The init in LLava is a bit weird and causes issues. Instead we will save a dict from a previously
         separate run and use those to initialize. These weights are also random but init correctly.
         """
-        save_path = Path('llava/model/multimodal_projector/pointtransformerv3_weights.pth')
+        # Anchored to this module, not the process CWD: the previous relative path only
+        # resolved when run from LLaVA/, so the cached weights were silently "not found"
+        # (and re-initialised) from any other working directory.
+        save_path = Path(__file__).resolve().parent / 'pointtransformerv3_weights.pth'
         if save_path.exists():
             # load the weights
             print(f'Loading PointTransformerV3 weights from {save_path}')
-            state = torch.load(save_path, map_location='cpu')
+            state = torch.load(save_path, map_location='cpu', weights_only=True)
             self.load_state_dict(state, strict=True)
         else:
             # only allow creating/saving weights when this file is executed directly

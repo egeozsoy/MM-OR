@@ -83,7 +83,7 @@ class LlavaMetaModel:
             p.requires_grad = True
 
         if pretrain_mm_mlp_adapter is not None:
-            mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
+            mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu', weights_only=True)
 
             def get_w(weights, keyword):
                 return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
@@ -191,7 +191,14 @@ class LlavaMetaForCausalLM(ABC):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
-                target_shape = past_key_values[-1][-1].shape[-2] + 1
+                # transformers >=4.36 passes a Cache object here, not the old
+                # tuple-of-tuples. Cache exposes get_seq_length(); the legacy indexing
+                # `past_key_values[-1][-1].shape[-2]` is kept as the fallback so this
+                # file still runs against the frozen baseline (transformers 4.31).
+                if hasattr(past_key_values, "get_seq_length"):
+                    target_shape = past_key_values.get_seq_length() + 1
+                else:
+                    target_shape = past_key_values[-1][-1].shape[-2] + 1
                 attention_mask = torch.cat((attention_mask, torch.ones(
                     (attention_mask.shape[0], target_shape - attention_mask.shape[1]),
                     dtype=attention_mask.dtype,
@@ -380,7 +387,7 @@ class LlavaMetaForCausalLM(ABC):
                     p.requires_grad = False
 
             if model_args.pretrain_mm_mlp_adapter:
-                mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
+                mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu', weights_only=True)
                 embed_tokens_weight = mm_projector_weights['model.embed_tokens.weight']
                 assert num_new_tokens == 2
                 if input_embeddings.shape == embed_tokens_weight.shape:

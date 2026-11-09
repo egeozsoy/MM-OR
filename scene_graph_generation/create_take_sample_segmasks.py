@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from functools import partial
 from pathlib import Path
 
@@ -80,6 +82,12 @@ def downsample_mask_preserve_classes(mask, OUTPUT_RES):
     return downsampled_mask
 
 
+# Opt-in: fill "predicted" segmasks from the released panoptic_seg_<cam>_for_val/ folders.
+# Those are renderings of the ground-truth annotations, so the result is NOT a
+# predicted-segmask setting; it exists only to reproduce runs that used them.
+FROM_RELEASED_GT = os.environ.get('SEGMASK_FROM_RELEASED_GT') == '1'
+
+
 def get_rgb_mask(mask):
     # Initialize mask_rgb directly with BGR format
     mask_rgb = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
@@ -89,7 +97,8 @@ def get_rgb_mask(mask):
     return mask_rgb
 
 
-def _segmask_helper(take_name, model_name, USE_GT=False, OUTPUT_RES=32):
+def _segmask_helper(item, model_name, USE_GT=False, OUTPUT_RES=32):
+    take_name, shard, n_shards = item
     dataset_type = '4DOR' if '4DOR' in take_name else 'MMOR'
     if dataset_type == '4DOR':
         output_folder = OR_4D_DATA_ROOT_PATH / 'take_segmasks_per_timepoint' / take_name
@@ -103,7 +112,7 @@ def _segmask_helper(take_name, model_name, USE_GT=False, OUTPUT_RES=32):
         take_path = MMOR_DATA_ROOT_PATH / take_folder
 
     if dataset_type == "MMOR":
-        json_path = Path('MM-OR_data') / 'take_jsons' / f'{take_name}.json'
+        json_path = MMOR_DATA_ROOT_PATH / 'take_jsons' / f'{take_name}.json'
         # Read MMOR/Simstation JSON file for timestamps and image paths
         with json_path.open() as f:
             take_json = json.load(f)
@@ -112,15 +121,18 @@ def _segmask_helper(take_name, model_name, USE_GT=False, OUTPUT_RES=32):
             timestamps = sorted(timestamps.items())
     elif dataset_type == "4DOR":
         internal_take_name = f'export_holistic_take{int(take_name.replace("_4DOR", ""))}_processed'
-        json_path = Path('4D-OR_data') / internal_take_name / 'timestamp_to_pcd_and_frames_list.json'
+        json_path = OR_4D_DATA_ROOT_PATH / internal_take_name / 'timestamp_to_pcd_and_frames_list.json'
         # Read 4D-OR JSON file for timestamps and image paths
         with json_path.open() as f:
             take_json = json.load(f)
             timestamps = sorted(take_json)
 
-    # Iterate through timestamps and generate multiview frames
-    for timestamp, image_files in tqdm(timestamps):
+    # Sharded by timestamp so one slow take doesn't serialize the whole run; outputs
+    # that already exist are skipped so an interrupted run can simply be restarted.
+    for timestamp, image_files in tqdm(timestamps[shard::n_shards], disable=n_shards > 1):
         timestamp_str = str(timestamp).zfill(6)
+        if (output_folder / f'{timestamp_str}_0_GT{USE_GT}.png').exists():
+            continue
         segmasks = []
 
         if dataset_type == "MMOR":
@@ -141,7 +153,15 @@ def _segmask_helper(take_name, model_name, USE_GT=False, OUTPUT_RES=32):
                         # segmask = cv2.cvtColor(get_rgb_mask(segmask), cv2.COLOR_BGR2RGB)
                         segmasks.append(segmask)
                 else:
-                    all_camera_parts = (model_name / 'inference' / 'pan_pred').glob(f'{take_name}_{c_idx}_*')
+                    # The released panoptic_seg_<cam>_for_val/ folders are ground-truth
+                    # renderings, not predictions (see MODERNIZATION.md, section 2). They are
+                    # only used when explicitly requested via SEGMASK_FROM_RELEASED_GT=1.
+                    released = take_path / f'panoptic_seg_{c_idx}_for_val'
+                    released_path = released / f'camera0{c_idx}_colorimage-{image_files["azure"]}.png'
+                    if FROM_RELEASED_GT and released_path.exists():
+                        all_camera_parts = [released]
+                    else:
+                        all_camera_parts = (model_name / 'inference' / 'pan_pred').glob(f'{take_name}_{c_idx}_*')
                     for all_camera_part in all_camera_parts:
                         image_path = all_camera_part / f'camera0{c_idx}_colorimage-{image_files["azure"]}.png'
                         if image_path.exists():  # this is already the rgb_mask. First map it back to label representation.
@@ -221,13 +241,21 @@ def _segmask_helper(take_name, model_name, USE_GT=False, OUTPUT_RES=32):
 
 
 def main():
-    seg_path = Path('panoptic_segmentation/output_CTVIS_R50_HybridOR_withsimstation')
+    # Local DVIS++/CTVIS inference output (pan_pred), see the panoptic segmentation section of the README.
+    seg_path = Path(__file__).resolve().parent.parent / 'panoptic_segmentation' / 'output_CTVIS_R50_HybridOR_withsimstation'
     USE_GT = False
     OUTPUT_RES = 32
     # 4dor
-    process_map(partial(_segmask_helper, model_name=seg_path, USE_GT=USE_GT, OUTPUT_RES=OUTPUT_RES), OR4D_TAKE_NAMES, max_workers=24, chunksize=1)
-    # mmor
-    process_map(partial(_segmask_helper, model_name=seg_path, USE_GT=USE_GT, OUTPUT_RES=OUTPUT_RES), MMOR_TAKE_NAMES, max_workers=24, chunksize=1)
+    # Optional argv: take names to restrict to (default: all 4D-OR + MM-OR takes).
+    # SEGMASK_WORKERS / SEGMASK_SHARDS_PER_TAKE control parallelism.
+    workers = int(os.environ.get('SEGMASK_WORKERS', 24))
+    n_shards = int(os.environ.get('SEGMASK_SHARDS_PER_TAKE', 1))
+    if FROM_RELEASED_GT:
+        print('WARNING: SEGMASK_FROM_RELEASED_GT=1: MM-OR segmasks are taken from the released '
+              'panoptic_seg_*_for_val folders, which are ground-truth renderings, not predictions.')
+    takes = sys.argv[1:] or (list(OR4D_TAKE_NAMES) + list(MMOR_TAKE_NAMES))
+    items = [(t, s, n_shards) for t in takes for s in range(n_shards)]
+    process_map(partial(_segmask_helper, model_name=seg_path, USE_GT=USE_GT, OUTPUT_RES=OUTPUT_RES), items, max_workers=workers, chunksize=1)
 
 
 if __name__ == '__main__':

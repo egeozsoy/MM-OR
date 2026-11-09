@@ -154,6 +154,8 @@ class VPSEvaluator(DatasetEvaluator):
 
         video_id = inputs[0]["video_id_part"] if 'video_id_part' in inputs[0] else inputs[0]["video_id"]
         image_names = [inputs[0]['file_names'][idx] for idx in inputs[0]["frame_idx"]]
+        # predictions are saved as pan_pred/<video_id>/<frame>.png: a repeated frame would be written twice
+        assert len(set(image_names)) == len(image_names), f'{video_id}: repeated frames in the video'
         img_shape = outputs['image_size']
         pan_seg_result = outputs['pred_masks'].to(device)
         segments_infos = outputs['segments_infos']
@@ -288,6 +290,12 @@ class VPSEvaluator(DatasetEvaluator):
                 json.dump({'annotations': predictions}, f)
 
         # Load the ground truth data
+        gt_name = next((p for p in ('mmor', '4dor', 'hybridor') if p in self._metadata.name), None)
+        if gt_name is not None and not os.path.exists(f'datasets/{gt_name}_ground_truth_{dataset_split}.json'):
+            raise FileNotFoundError(f'datasets/{gt_name}_ground_truth_{dataset_split}.json is missing. The predictions are saved in '
+                                    f'{self._output_dir}. Build the file with `python eval_from_preds.py --build-gt-only --dataset '
+                                    f'{self._metadata.name}`, then score them with `python eval_from_preds.py {self._output_dir} '
+                                    f'--dataset {self._metadata.name}`.')
         if 'mmor' in self._metadata.name:
             with open(f'datasets/mmor_ground_truth_{dataset_split}.json', 'r') as f:
                 gt_jsons = json.load(f)
@@ -344,7 +352,7 @@ class VPSEvaluator(DatasetEvaluator):
         for nframes in [4, 8]:
             gt_pred_split_ = copy.deepcopy(gt_pred_split)
             vpq_all_, vpq_thing_, vpq_stuff_, results = vpq_compute_parallel(
-                gt_pred_split_, categories, nframes, self._output_dir, num_processes=12
+                gt_pred_split_, categories, nframes, self._output_dir, num_processes=int(os.environ.get("VPQ_NUM_PROCESSES", 12))
             )  # adjust num_processes to 1 if want to debug properly
             vpq_all.append(vpq_all_)
             vpq_thing.append(vpq_thing_)
