@@ -46,3 +46,7 @@ pointtransformerv3_weights.pth
 /scene_graph_generation/data/sample_to_similar_samples_*.json
 segmentation_map_feature_extractor_withembeddings*.pt
 /scene_graph_generation/.venv-mmor/
+/panoptic_segmentation/.venv-panoptic/
+/panoptic_segmentation/mm-or_cache/
+/panoptic_segmentation/4d-or_cache/
+/panoptic_segmentation/datasets/*_ground_truth_*.json

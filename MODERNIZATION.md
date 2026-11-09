@@ -17,6 +17,10 @@ This change ports the MM2SG scene-graph pipeline from its original
 The source tree is **bi-compatible**: it still imports and runs on the original stack. That
 is what allows the original environment to serve as a parity oracle for every change below.
 
+The panoptic-segmentation part is ported to the same torch in its own environment; §4 covers
+its changes and verification (VPQ of all three released checkpoints within 0.16 of the
+original stack).
+
 **Result: the modernized stack reproduces the original pipeline's metrics on the full test
 set (combined Macro-F1 0.691 vs 0.689, every take within ±0.007), and its training loss
 tracks the original within run-to-run noise over 200 steps (see
@@ -567,3 +571,95 @@ Practical consequences:
   The segmask inputs deviate from the paper's setup: ground truth for MM-OR, none for 4D-OR
   (see §2, "Segmask inputs in this verification").
 - **Downstream tasks.** Blocked by the missing `extract_metalabels_for_MMOR.py`.
+
+---
+
+## 4. Panoptic segmentation
+
+The panoptic-segmentation part (`panoptic_segmentation/`: DVIS++ and CTVIS on detectron2 and
+Mask2Former) is ported to the same torch as the scene-graph part, in its own environment:
+
+| | original (`requirements.txt`) | modernized (`requirements-modern/`) |
+|---|---|---|
+| Python | 3.10 | 3.12 |
+| torch | 1.13.1 + cu117 | 2.9.1 + cu128 |
+| detectron2 | v0.6 | main at `247691a` (reports version 0.6) |
+| numpy / Pillow | 1.23 / 9.1 | 2.5 / 13.0 |
+| MSDeformAttn op | compiled with nvcc 11.x | compiled with nvcc 12.x |
+
+As for the scene-graph part, the source stays usable on the original stack, which again served
+as the reference for all comparisons below.
+
+### Installation
+
+```bash
+cd panoptic_segmentation
+./setup_env_modern.sh                    # venv in .venv-panoptic
+./setup_env_modern.sh --locked           # exact verified package set
+```
+
+Unlike the scene-graph environment, this one compiles detectron2 and the MSDeformAttn op, so
+it needs a CUDA 12.x toolkit (12.8 or newer for Blackwell; `--cuda-home`). `MAX_JOBS` (default
+4) limits parallel compilation, `TORCH_CUDA_ARCH_LIST` selects the GPU architectures.
+
+### Code changes
+
+- **MSDeformAttn CUDA op.** `Tensor::type()` (removed from the dispatch macros),
+  `Tensor::data<T>()` and the THC header are replaced by `scalar_type()` / `is_cuda()`,
+  `data_ptr<T>()` and `ATen/cuda/Atomic.cuh`. All exist in torch 1.13 as well: the changed source
+  still compiles there, and on identical inputs its forward pass is bit-identical to the
+  original op's. The gradients differ by at most 2.4e-7, less than the original op differs
+  from itself between two runs (3.0e-7; the backward pass accumulates with `atomicAdd`).
+- **numpy 2.** `np.bool` / `np.float` (removed in numpy 1.24) become `np.bool_` / `np.float64`.
+- **A frame listed twice in a video crashed the DVIS++ evaluation (bug in the original code).**
+  In the test split, a few synchronisation timestamps map to the same image as a neighbouring
+  one (`004_PKA` cameras 1/4/5, 4D-OR take 2 camera 5): 12 frames appeared twice, in 8 of the 90
+  test videos. `VPSEvaluator` saves predictions as `pan_pred/<video>/<frame>.png`, from a thread
+  pool, so the second copy overwrote the first. With DVIS++ offline this left corrupt PNGs; with
+  DVIS++ online, whose track ids differ between the two copies, scoring failed with
+  `Segment with ID ... is presented in PNG and not presented in JSON`. CTVIS happened to give
+  both copies the same ids. Both loaders now keep the first timestamp of each frame, and the
+  evaluator asserts unique frames per video. This removes those 12 entries from the test split
+  (16,243 → 16,231; the 200-frame video parts are cut after deduplication). The train
+  and val splits contain no repeats and are unchanged. On the original stack, CTVIS moves from
+  VPQ 58.25 to 58.22.
+- **The VPQ ground truth is not released.** The evaluator reads
+  `datasets/<dataset>_ground_truth_<split>.json`, which only the `__main__` blocks of the
+  dataset modules wrote (for all splits at once, train included). `eval_from_preds.py
+  --build-gt-only` builds one split, and `eval_from_preds.py <OUTPUT_DIR>/inference` scores saved
+  predictions without a GPU. A missing file now raises an error that names both commands.
+- `VPQ_NUM_PROCESSES` sets the size of the VPQ scoring pool (default 12, as before).
+
+Nothing else had to change: the current detectron2 runs the code as is, and all three released
+checkpoints load completely (no missing or unexpected keys, every tensor as stored).
+
+### Verification
+
+Both environments ran this branch's code on the same data (the HybridOR test split: MM-OR takes
+004/011/036/038 and 4D-OR takes 2/6, 90 videos) on the same GPU model (NVIDIA A40), each with its
+own copy of the folders the loaders write.
+
+- **Ground truth.** The test split's ground-truth json and all 32,030 `panoptic_seg_*` PNGs the
+  loaders render are byte-identical between the two stacks.
+- **Released checkpoints, HybridOR test split.** VPQ is the mean over the 15- and 35-frame
+  windows that `VPSEvaluator` computes; precision and recall likewise.
+
+  | model | original stack | modernized stack | Δ VPQ |
+  |---|---|---|---|
+  | CTVIS | 58.22 (P 0.637, R 0.644) | 58.31 (P 0.642, R 0.642) | +0.08 |
+  | DVIS++ online | 56.97 (P 0.659, R 0.606) | 57.13 (P 0.659, R 0.608) | +0.16 |
+  | DVIS++ offline | 60.50 (P 0.680, R 0.663) | 60.57 (P 0.680, R 0.660) | +0.07 |
+
+  The differences are at most 0.16 VPQ (0.3 % relative), with precision and recall moving in
+  both directions. Run-to-run noise of this evaluation was not measured; the per-class scores
+  agree closely (e.g. CTVIS instrument table 0.948 on both stacks).
+- **Runtime.** CTVIS inference over the test split took 48 min on the modernized stack and
+  56 min on the original one; VPQ scoring takes about 2 hours on the CPU on either.
+
+### Not yet verified
+
+- **Training** the panoptic models on the modernized stack (only the released checkpoints were
+  evaluated).
+- **The train and val splits**, which are needed to generate predicted segmasks for scene-graph
+  training (see §2, "Segmask inputs in this verification").
+- **Comparison with the paper's table**, as for the scene-graph part.

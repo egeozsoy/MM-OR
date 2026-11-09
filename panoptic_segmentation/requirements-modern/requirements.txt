@@ -1,0 +1,27 @@
+# Top-level packages of the modernized panoptic stack (Python 3.12), at the versions it was
+# verified with. torch: requirements-modern/torch.txt. detectron2, panopticapi and the
+# MSDeformAttn op are built from source by setup_env_modern.sh.
+# The original stack (torch 1.13.1, Python 3.10) is described by requirements.txt.
+cython==3.3.1
+numpy==2.5.4
+scipy==1.18.1
+matplotlib==3.11.2
+shapely==2.2.0
+timm==1.0.31
+h5py==3.16.0
+submitit==1.5.4
+einops==0.8.2
+opencv-python-headless==5.0.0.93
+open_clip_torch==4.2.1
+json_tricks==3.17.3
+wandb==0.31.0
+torchinfo==1.8.0
+Pillow==13.0.0
+# detectron2 build/runtime dependencies (installed explicitly: it is built without isolation)
+fvcore==0.1.5.post20221221
+iopath==0.1.9
+pycocotools==2.0.11
+tabulate==0.10.0
+imagesize==2.0.1
+ninja==1.13.2
+wheel==0.48.0

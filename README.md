@@ -78,7 +78,14 @@ This part of the repository contains the code for training and evaluating panopt
 For scene graph generation segmentations are also used, but this is an additional modality that can be skipped. Our paper provides results for both with and without segmentations.
 This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-whu/DVIS_Plus).
 
-### Installation
+### Installation (modernized stack: Python 3.12, torch 2.9.1, CUDA 12.8)
+
+- Download the relevant models from: https://huggingface.co/egeozsoy/MM-OR/tree/main/panoptic_segmentation/mask2former
+- cd into panoptic_segmentation dir
+- Run `./setup_env_modern.sh` (or `./setup_env_modern.sh --locked` for the exact verified package set). It creates `.venv-panoptic` and compiles detectron2 and the MSDeformAttn op, so it needs a CUDA 12.x toolkit (`--cuda-home`, 12.8 or newer for Blackwell GPUs). `./setup_env_modern.sh --help` lists the options.
+- This stack reproduces the original one's VPQ for all three released checkpoints; see [MODERNIZATION.md, §4](MODERNIZATION.md#4-panoptic-segmentation).
+
+### Installation (original stack: torch 1.13.1, CUDA 11.x)
 
 - Download the relevant models from: https://huggingface.co/egeozsoy/MM-OR/tree/main/panoptic_segmentation/mask2former
 - cd into panoptic_segmentation dir
@@ -96,8 +103,11 @@ This section builds upon the DVIS_PLUS repository (https://github.com/zhang-tao-
 - For evaluation any model after training, use the `--eval-only MODEL.WEIGHTS PATH_TO_MODEL.pth`, instead of `--resume MODEL.WEIGHTS PATH_TO_MODEL.pth`. Otherwise the command is the same as the training command.
 - We include in the repository all three checkpoints, which you can directly use. (
   e.g https://huggingface.co/egeozsoy/MM-OR/tree/main/output_CTVIS_R50_HybridOR_withsimstation, https://huggingface.co/egeozsoy/MM-OR/tree/main/output_R50_HybridOR_temporal_online_withsimstation, https://huggingface.co/egeozsoy/MM-OR/resolve/main/DVIS_Plus_Offline_R50_HybridOR_temporal_offline_52_reverseagu_withsimstation)
+- The evaluation scores against `datasets/<dataset>_ground_truth_<split>.json`, which is not part of the release. Build it once per split before the first evaluation: `python eval_from_preds.py --build-gt-only --dataset hybridor_panoptic_test`.
+- The evaluation first saves the predictions (`OUTPUT_DIR/inference/pred_<split>.json` and `pan_pred/`), then computes VPQ on the CPU (about 2 hours for the HybridOR test split, with the model still on the GPU). `python eval_from_preds.py OUTPUT_DIR/inference --dataset hybridor_panoptic_test` scores saved predictions again without a GPU; `VPQ_NUM_PROCESSES` sets the size of the scoring pool (default 12).
+- Example, released CTVIS checkpoint on the HybridOR test split: `python -u train_net_video.py --num-gpus 1 --config-file configs/dvis_Plus/HybridOR/CTVIS_r50.yaml --eval-only MODEL.WEIGHTS output_CTVIS_R50_HybridOR_withsimstation/model_final.pth OUTPUT_DIR output_eval_ctvis`. Expected VPQ: CTVIS 58.3, DVIS++ online 57.1, DVIS++ offline 60.6 (see [MODERNIZATION.md, §4](MODERNIZATION.md#4-panoptic-segmentation)).
+- The data loaders write `panoptic_seg_<cam>/` and `panoptic_seg_<cam>_for_val/` into every take folder of `../MM-OR_data` and `../4D-OR_data`, and caches into `mm-or_cache/` and `4d-or_cache/`. The dataset therefore has to be writable.
 - Running a full evaluation like this will likely be necessary if you want to use the segmentations for scene graph generation. Make sure to run it for train/val and eventually test splits.
-
 
 ## Scene Graph Generation
 This part of the repository contains the code for training and evaluating scene graph generation models. If you are only interested in the panoptic segmentation part, you can skip this part.
